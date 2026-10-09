@@ -94,6 +94,29 @@ test("take-home per biweekly paycheck averages to monthly; export stays amount-f
   assert.throws(() => normalize({ income: { take_home_monthly: 6000, take_home_biweekly: 2800 } }), /not both/);
 });
 
+test("taxes withheld = gross - 401k - other deductions - take-home", () => {
+  const grossM = 115000 / 12;
+  close(A.amounts.taxes_monthly, grossM - 575 - 6200);
+  close(A.ratios.taxes_share_of_gross, (grossM - 575 - 6200) / grossM);
+  const tc = A.checks.find(c => c.key === "taxes");
+  assert.equal(tc.status, "info");
+  assert.match(tc.detail, /No other deductions entered/);
+
+  // biweekly paychecks with per-paycheck deductions
+  const input = { ...EXAMPLE, income: { take_home_biweekly: 2850, other_deductions_biweekly: 150, gross_annual: 115000 } };
+  const B = analyze(normalize(input), TODAY);
+  close(B.amounts.other_deductions_monthly, 150 * 26 / 12);
+  close(B.amounts.taxes_monthly, grossM - 575 - 150 * 26 / 12 - 2850 * 26 / 12);
+  assert.doesNotMatch(B.checks.find(c => c.key === "taxes").detail, /No other deductions/);
+  assertNoLeaks(input, B);
+
+  // inconsistent inputs are flagged, missing inputs skip the check
+  const bad = analyze(normalize({ income: { take_home_monthly: 5000, gross_annual: 50000 } }), TODAY);
+  assert.equal(bad.checks.find(c => c.key === "taxes").status, "watch");
+  assert.equal(analyze(normalize({ income: { take_home_monthly: 5000 } }), TODAY).amounts.taxes_monthly, null);
+  assert.throws(() => normalize({ income: { other_deductions_monthly: 100, other_deductions_biweekly: 50 } }), /not both/);
+});
+
 test("home: housing is its own cash-flow line, equity counts in net worth, housing ratios checked", () => {
   const input = { ...EXAMPLE, expenses: EXAMPLE.expenses.filter(e => e.name !== "housing"),
     home: { value: 420000, mortgage_balance: 310000, mortgage_apr: 0.0625, mortgage_payment: 1910, costs_monthly: 520 } };

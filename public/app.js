@@ -154,7 +154,7 @@ Alpine.data("app", () => ({
     this._current = { A, n };
     const a = A.amounts;
     this.sums = {
-      income: money(a.take_home_monthly) + " / mo",
+      income: money(a.take_home_monthly) + " / mo" + (a.taxes_monthly > 0 ? " · taxes " + money(a.taxes_monthly) : ""),
       retirement: money(a.employee_401k_monthly + a.employer_401k_monthly) + " / mo",
       savings: n.savings ? money(a.saved_from_pay_monthly) + " / mo" : "assumed: full surplus",
       expenses: money(a.expenses_monthly) + " / mo",
@@ -245,15 +245,19 @@ Alpine.data("app", () => ({
   isBiweekly() { return "take_home_biweekly" in this.data.income; },
   isMonthly() { return !this.isBiweekly(); },
   isPeriod(p) { return (p.value === "biweekly") === this.isBiweekly(); },
-  /** Converts the amount on switch so results don't jump before the user types their paycheck. */
+  /** Converts take-home and other deductions on switch so results don't jump before the user types their paycheck. */
   setPayPeriod(ev) {
     const inc = this.data.income, toBiweekly = ev.target.value === "biweekly";
     if (toBiweekly === this.isBiweekly()) return;
-    const v = Number(toBiweekly ? inc.take_home_monthly : inc.take_home_biweekly) || 0;
-    const conv = toBiweekly ? v / BIWEEKLY_TO_MONTHLY : v * BIWEEKLY_TO_MONTHLY;
-    delete inc.take_home_monthly; delete inc.take_home_biweekly;
-    inc[toBiweekly ? "take_home_biweekly" : "take_home_monthly"] = v ? Math.round(conv * 100) / 100 : null;
+    const [src, dst] = toBiweekly ? ["_monthly", "_biweekly"] : ["_biweekly", "_monthly"];
+    const f = toBiweekly ? 1 / BIWEEKLY_TO_MONTHLY : BIWEEKLY_TO_MONTHLY;
+    for (const base of ["take_home", "other_deductions"]) {
+      const had = (base + src) in inc, v = Number(inc[base + src]) || 0;
+      delete inc[base + src]; delete inc[base + dst];
+      if (had || base === "take_home") inc[base + dst] = v ? Math.round(v * f * 100) / 100 : null; // take_home's key sets the period
+    }
   },
+  deductionsLabel() { return "Other paycheck deductions" + (this.isBiweekly() ? " / paycheck" : " / month"); },
   takeHomeHint() {
     if (!this.isBiweekly()) return "Net pay deposited to your bank.";
     const m = (Number(this.data.income.take_home_biweekly) || 0) * BIWEEKLY_TO_MONTHLY;

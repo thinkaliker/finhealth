@@ -80,6 +80,7 @@ const COLORS = {
   flow: { expenses: "--s1", debt: "--s2", saved: "--s3", unassigned: "--s4", housing: "--s5" },
   cash: { cash: "--s3", hysa: "--s1", cd: "--s2" },
   home: { equity: "--s3", mortgage: "--s2" },
+  gross: { taxes: "--s2", k401: "--s1", deductions: "--s4", take_home: "--s3" },
 };
 const CASH_NAMES = { cash: "Checking / savings", hysa: "High-yield savings", cd: "CDs" };
 
@@ -229,8 +230,27 @@ function draw() {
     el("div", { id: "lg-growth" }), el("div", { class: "chart", id: "ch-growth" }), el("div", { id: "ft-growth" })));
 
   const grid = el("div", { class: "grid2" });
-  // cash flow
   const debtPay = a.debt_payments_monthly, exp = a.expenses_monthly, th = a.take_home_monthly;
+
+  // gross pay: taxes and deductions come out before take-home
+  if (a.taxes_monthly !== null) {
+    const gm = a.gross_monthly, tx = a.taxes_monthly;
+    const parts = [
+      { name: "Taxes", value: tx, color: C(COLORS.gross.taxes) },
+      { name: "Your 401k", value: a.employee_401k_monthly, color: C(COLORS.gross.k401) },
+      { name: "Other deductions", value: a.other_deductions_monthly, color: C(COLORS.gross.deductions) },
+      { name: "Take-home", value: th, color: C(COLORS.gross.take_home) },
+    ].filter(p => p.value > 0);
+    grid.append(card("Where gross pay goes", tx < 0
+      ? "Take-home plus 401(k) and other deductions add up to more than gross salary; check those inputs."
+      : `Taxes withheld: ${money(tx)} / month, ${money(tx * 12)} / year, ${pct(tx / gm)} of gross.`,
+      el("div", { class: "stacklab", text: `Gross ${money(gm)} / month` }), stackBar(parts, money),
+      legend(parts.map(p => ({ ...p, value: `${money(p.value)} · ${pct(p.value / gm)}` }))),
+      el("p", { class: "note", text: "Taxes are what's left after take-home, 401(k), and other deductions: federal, state, Social Security, and Medicare withholding. A refund or balance due at filing changes the final amount." }),
+      table(["Item", "Per month", "Per year", "Share of gross"], parts.map(p => [p.name, money(p.value), money(p.value * 12), pct(p.value / gm, 1)]))));
+  }
+
+  // cash flow
   const saved = Math.min(a.saved_from_pay_monthly, Math.max(0, a.surplus_monthly));
   const unassigned = Math.max(0, a.surplus_monthly - saved);
   const flow = [

@@ -67,7 +67,13 @@
           <div class="hint" x-text="takeHomeHint()"></div></div>
         <div class="field"><label for="f-gross">Gross salary / year</label>
           <div class="num"><input id="f-gross" type="number" step="any" min="0" inputmode="decimal" x-model.number="data.income.gross_annual"></div>
-          <div class="hint">Needed for 401k amounts and debt-to-income.</div></div>
+          <div class="hint">Before any deductions. Needed for 401k amounts, taxes, and debt-to-income.</div></div>
+        <div class="field"><label for="f-od" x-text="deductionsLabel()"></label>
+          <template x-if="isMonthly()">
+            <div class="num"><input id="f-od" type="number" step="any" min="0" inputmode="decimal" x-model.number="data.income.other_deductions_monthly"></div></template>
+          <template x-if="isBiweekly()">
+            <div class="num"><input id="f-od" type="number" step="any" min="0" inputmode="decimal" x-model.number="data.income.other_deductions_biweekly"></div></template>
+          <div class="hint">Optional. Health, dental, vision premiums, HSA/FSA: anything withheld besides taxes and 401(k). Without it, these count as taxes.</div></div>
       </div>
     </details>
 

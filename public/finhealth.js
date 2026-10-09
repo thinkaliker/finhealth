@@ -75,10 +75,11 @@ export function normalize(input) {
   if (d.home && !((d.home.mortgage_apr ?? 0) >= 0 && (d.home.mortgage_apr ?? 0) < 1))
     throw new Error("home: mortgage_apr should be a fraction, e.g. 0.065 for 6.5%");
   if (d.profile && d.profile.age === 0) delete d.profile.age;
-  // take-home is per month or per biweekly paycheck; the key that is present says which
-  if (d.income && "take_home_biweekly" in d.income) {
-    if (d.income.take_home_monthly) throw new Error("income: give take_home_monthly or take_home_biweekly, not both");
-    delete d.income.take_home_monthly;
+  // take-home and other deductions are per month or per biweekly paycheck; the key that is present says which
+  for (const base of ["take_home", "other_deductions"]) {
+    if (!d.income || !(`${base}_biweekly` in d.income)) continue;
+    if (d.income[`${base}_monthly`]) throw new Error(`income: give ${base}_monthly or ${base}_biweekly, not both`);
+    delete d.income[`${base}_monthly`];
   }
   if (d.savings && Object.keys(d.savings).length === 0) delete d.savings;
 
@@ -138,6 +139,9 @@ const ratio = (n, dnm) => (dnm ? n / dnm : null);
 const sum = xs => xs.reduce((s, v) => s + v, 0);
 const fmtPct = (v, d = 0) => `${(v * 100).toFixed(d)}%`;
 
+/** Monthly value of an income field entered per month (<base>_monthly) or per biweekly paycheck (<base>_biweekly). */
+const perMonth = (inc, base) => `${base}_biweekly` in inc ? inc[`${base}_biweekly`] * BIWEEKLY_TO_MONTHLY : inc[`${base}_monthly`] ?? 0;
+
 export function payoffMonths(balance, apr, payment) {
   if (balance <= 0) return 0;
   const r = apr / 12;
@@ -153,9 +157,8 @@ export function payoffMonths(balance, apr, payment) {
 export function analyze(d, today = todayISO()) {
   const assumptions = [];
   const inc = d.income ?? {}, ret = d.retirement ?? {};
-  const biweekly = "take_home_biweekly" in inc;
-  const takeHome = biweekly ? inc.take_home_biweekly * BIWEEKLY_TO_MONTHLY : inc.take_home_monthly ?? 0;
-  if (biweekly) assumptions.push("Take-home pay was entered per biweekly paycheck and averaged to monthly (26 paychecks over 12 months); two months a year have a third paycheck.");
+  const takeHome = perMonth(inc, "take_home");
+  if ("take_home_biweekly" in inc) assumptions.push("Take-home pay was entered per biweekly paycheck and averaged to monthly (26 paychecks over 12 months); two months a year have a third paycheck.");
   const grossM = (inc.gross_annual ?? 0) / 12;
   const expenses = {};
   for (const r of d.expenses ?? []) expenses[r.name] = (expenses[r.name] ?? 0) + r.amount;
@@ -168,6 +171,10 @@ export function analyze(d, today = todayISO()) {
   const empPct = ret.employee_contribution_pct ?? 0, limit = ret.employer_match_limit_pct ?? 0;
   const employee401k = empPct * grossM;
   const employer401k = ((ret.employer_match_rate ?? 0) * Math.min(empPct, limit) + (ret.employer_nonelective_pct ?? 0)) * grossM;
+
+  // taxes withheld: what's left of gross pay after take-home, your 401(k), and other paycheck deductions
+  const otherDed = perMonth(inc, "other_deductions");
+  const taxes = grossM > 0 && takeHome > 0 ? grossM - employee401k - otherDed - takeHome : null;
 
   // home (optional): equity counts toward net worth; mortgage payment plus property costs are their own cash-flow line
   const home = d.home ?? null;
@@ -257,7 +264,8 @@ export function analyze(d, today = todayISO()) {
   history.push({ date: today, net_worth: netWorth, investable, current: true });
 
   const amounts = {
-    take_home_monthly: takeHome, gross_monthly: grossM, expenses_monthly: expTotal, debt_payments_monthly: debtPay,
+    take_home_monthly: takeHome, gross_monthly: grossM, taxes_monthly: taxes, other_deductions_monthly: otherDed,
+    expenses_monthly: expTotal, debt_payments_monthly: debtPay,
     debt_balance: debtBal, employee_401k_monthly: employee401k, employer_401k_monthly: employer401k,
     saved_from_pay_monthly: savedFromPay, surplus_monthly: surplus, cash, investable, assets, net_worth: netWorth,
     expenses, buckets, allocation: alloc, liquid_cash: liquid, cd_accessible: cdAccess, emergency_cash: emergencyCash,
@@ -268,6 +276,7 @@ export function analyze(d, today = todayISO()) {
 
   const ratios = {
     savings_rate: savingsRate,
+    taxes_share_of_gross: taxes === null ? null : taxes / grossM,
     expenses_share_of_take_home: ratio(expTotal, takeHome),
     debt_payments_share_of_take_home: ratio(debtPay, takeHome),
     surplus_share_of_take_home: ratio(surplus, takeHome),
@@ -310,6 +319,14 @@ export function analyze(d, today = todayISO()) {
   else C("cash_flow", "Monthly cash flow", "ok", ratio(surplus, takeHome), "%", `Take-home covers ${outflows}.`);
   if (savingsRate !== null) C("savings_rate", "Savings rate", savingsRate >= 0.2 ? "ok" : savingsRate >= 0.1 ? "watch" : "act", savingsRate, "%",
     "Includes 401k employee+employer and savings from take-home. Benchmarks: <10% low, 10-20% moderate, 20%+ strong.");
+  if (taxes !== null) {
+    const t = taxes / grossM;
+    if (t < 0) C("taxes", "Taxes withheld (share of gross)", "watch", t, "%",
+      "Take-home plus 401(k) and other deductions add up to more than gross salary. Check that gross is before any deductions, and that a bonus is counted in both or neither.");
+    else C("taxes", "Taxes withheld (share of gross)", "info", t, "%",
+      "Gross pay minus take-home, your 401(k), and other paycheck deductions: federal, state, and payroll taxes. This is withholding, not the final tax bill." +
+      (otherDed ? "" : " No other deductions entered, so any health premiums or HSA/FSA withheld from pay are counted here too."));
+  }
   if (efMonths !== null) C("emergency_fund", "Emergency fund", efMonths >= 6 ? "ok" : efMonths >= 3 ? "watch" : "act", efMonths, "months",
     `Cash divided by monthly ${outflows}. Common target 3-6 months; more if income is variable.` +
     (cds.length ? ` Includes CDs at early-withdrawal value; checking and savings alone cover ${liquidMonths.toFixed(1)} months.` : ""));
@@ -487,12 +504,15 @@ export function exportMarkdown(A) {
 /** Local report with amounts. Never share this one. */
 export function reportText(A) {
   const a = A.amounts;
-  const keys = ["take_home_monthly", "employee_401k_monthly", "employer_401k_monthly", "expenses_monthly", "debt_payments_monthly",
+  const keys = ["gross_monthly", "take_home_monthly", "employee_401k_monthly", "employer_401k_monthly", "expenses_monthly", "debt_payments_monthly",
     "surplus_monthly", "saved_from_pay_monthly", "liquid_cash", "cash", "investable", "debt_balance", "net_worth"];
-  const rows = keys.map(k => [k, a[k]]);
-  if (a.home) {
-    rows.splice(keys.indexOf("debt_payments_monthly") + 1, 0, ["housing_monthly", a.home.housing]);
-    rows.splice(rows.length - 1, 0, ["home_value", a.home.value], ["mortgage_balance", a.home.mortgage_balance]);
+  const rows = [];
+  for (const k of keys) {
+    rows.push([k, a[k]]);
+    if (k === "employer_401k_monthly" && a.taxes_monthly !== null) rows.push(["taxes_withheld_monthly", a.taxes_monthly]);
+    if (k === "employer_401k_monthly" && a.other_deductions_monthly) rows.push(["other_deductions_monthly", a.other_deductions_monthly]);
+    if (k === "debt_payments_monthly" && a.home) rows.push(["housing_monthly", a.home.housing]);
+    if (k === "debt_balance" && a.home) rows.push(["home_value", a.home.value], ["mortgage_balance", a.home.mortgage_balance]);
   }
   const lines = ["LOCAL REPORT (contains amounts; do not share)", ""];
   for (const [k, v] of rows) lines.push(`  ${k.padEnd(28)} ${Math.round(v).toLocaleString("en-US").padStart(14)}`);
