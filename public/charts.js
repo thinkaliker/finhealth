@@ -30,6 +30,12 @@ const css = name => getComputedStyle(document.documentElement).getPropertyValue(
 let money, moneyShort;
 const setCurrency = code => ({ money, short: moneyShort } = moneyFormat(code));
 setCurrency();
+const personName = i => S.data?.people?.[i]?.name || `Person ${i + 1}`;
+/** " (age 58)" or " (ages 58 and 56)" for people with an age, `plus` years from now. */
+const agesText = (ages, plus) => {
+  const known = (ages ?? []).filter(a => a), list = known.map(a => a + plus);
+  return !list.length ? "" : list.length === 1 ? ` (age ${list[0]})` : ` (ages ${list.slice(0, -1).join(", ")} and ${list[list.length - 1]})`;
+};
 const pct = (v, d = 0) => v == null ? "n/a" : (v * 100).toFixed(d) + "%";
 const today = () => todayISO();
 const fmtDate = s => new Date(s + "T00:00:00").toLocaleDateString(undefined, { month: "short", year: "numeric" });
@@ -214,7 +220,7 @@ function draw() {
 
   // checks
   R.append(el("div", { class: "checks" }, ...A.checks.map(c => el("div", { class: "check", "data-s": c.status },
-    el("div", { class: "lab", text: c.label }),
+    el("div", { class: "lab", text: c.label + (c.person != null ? " · " + personName(c.person) : "") }),
     el("div", { class: "val", text: fmtCheck(c) }),
     el("span", { class: "badge", "data-s": c.status }, el("i", { "aria-hidden": "true", text: ICON[c.status] }), STATUS_WORD[c.status]),
     el("div", { class: "det", text: c.detail })))));
@@ -232,21 +238,25 @@ function draw() {
   const debtPay = a.debt_payments_monthly, exp = a.expenses_monthly, th = a.take_home_monthly;
 
   // gross pay: taxes and deductions come out before take-home
-  if (a.taxes_monthly !== null) {
-    const gm = a.gross_monthly, tx = a.taxes_monthly;
-    const parts = [
-      { name: "Taxes", value: tx, color: C(COLORS.gross.taxes) },
-      { name: "Your 401k", value: a.employee_401k_monthly, color: C(COLORS.gross.k401) },
-      { name: "Other deductions", value: a.other_deductions_monthly, color: C(COLORS.gross.deductions) },
-      { name: "Take-home", value: th, color: C(COLORS.gross.take_home) },
-    ].filter(p => p.value > 0);
-    grid.append(card("Where gross pay goes", tx < 0
+  const earners = a.people.map((p, i) => ({ ...p, label: personName(i) })).filter(p => p.taxes !== null);
+  if (earners.length) {
+    const multi = a.people.length > 1, tx = a.taxes_monthly, gm = earners.reduce((s, p) => s + p.gross, 0);
+    const partsOf = p => [
+      { name: "Taxes", value: p.taxes, color: C(COLORS.gross.taxes) },
+      { name: "401k", value: p.employee_401k, color: C(COLORS.gross.k401) },
+      { name: "Other deductions", value: p.other_deductions, color: C(COLORS.gross.deductions) },
+      { name: "Take-home", value: p.take_home, color: C(COLORS.gross.take_home) },
+    ].filter(x => x.value > 0);
+    grid.append(card("Where gross pay goes", earners.some(p => p.taxes < 0)
       ? "Take-home plus 401(k) and other deductions add up to more than gross salary; check those inputs."
-      : `Taxes withheld: ${money(tx)} / month, ${money(tx * 12)} / year, ${pct(tx / gm)} of gross.`,
-      el("div", { class: "stacklab", text: `Gross ${money(gm)} / month` }), stackBar(parts, money),
-      legend(parts.map(p => ({ ...p, value: `${money(p.value)} · ${pct(p.value / gm)}` }))),
+      : `Taxes withheld${multi ? " (household)" : ""}: ${money(tx)} / month, ${money(tx * 12)} / year, ${pct(tx / gm)} of gross.`,
+      ...earners.map(p => el("div", {},
+        el("div", { class: "stacklab", text: (multi ? `${p.label}: gross ` : "Gross ") + `${money(p.gross)} / month` + (multi ? ` · taxes ${pct(p.taxes / p.gross)}` : "") }),
+        stackBar(partsOf(p), money),
+        legend(partsOf(p).map(x => ({ ...x, value: `${money(x.value)} · ${pct(x.value / p.gross)}` }))))),
       el("p", { class: "note", text: "Taxes are what's left after take-home, 401(k), and other deductions: federal, state, Social Security, and Medicare withholding. A refund or balance due at filing changes the final amount." }),
-      table(["Item", "Per month", "Per year", "Share of gross"], parts.map(p => [p.name, money(p.value), money(p.value * 12), pct(p.value / gm, 1)]))));
+      table([...(multi ? ["Person"] : []), "Item", "Per month", "Per year", "Share of gross"],
+        earners.flatMap(p => partsOf(p).map(x => [...(multi ? [p.label] : []), x.name, money(x.value), money(x.value * 12), pct(x.value / p.gross, 1)])))));
   }
 
   // cash flow: income (take-home plus other income) split into where it goes
@@ -436,8 +446,8 @@ const FI_SLIDERS = [
   { key: "withdrawal_rate", label: "Withdrawal rate", scale: 100, step: 0.25, fmt: v => `${pctT(v)} · target ${+(1 / v).toFixed(1)}× spending` },
   { key: "real_return", label: "Return after inflation", scale: 100, step: 0.5, fmt: v => `${pctT(v)} a year` },
   { key: "retire_in_years", label: "Stop working in", scale: 1, step: 1,
-    fmt: (v, p, age) => (v === 0 ? "now" : `${v} year${v === 1 ? "" : "s"}`) + (age ? ` (age ${age + v})` : "") +
-      (p.input?.retire_in_years != null ? "" : p.years_to_fi != null ? " · when target is reached" : age ? " · default: 65" : " · default") },
+    fmt: (v, p, ages) => (v === 0 ? "now" : `${v} year${v === 1 ? "" : "s"}`) + agesText(ages, v) +
+      (p.input?.retire_in_years != null ? "" : p.years_to_fi != null ? " · when target is reached" : ages?.some(a => a) ? " · default: 65" : " · default") },
   { key: "retirement_tax_rate", label: "Tax on 401(k)/IRA withdrawals", scale: 100, step: 1, fmt: v => pctT(v) },
 ];
 let fiHandler = null;
@@ -479,10 +489,10 @@ function previewFi(sl) {
 }
 
 function fillFi(plan, activeKey) {
-  const F = S.fi, a = S.analysis.amounts, age = a.fi_base.age, s = plan.settings, at = plan.at_retirement, ri = s.retire_in_years;
+  const F = S.fi, a = S.analysis.amounts, ages = a.fi_base.ages, s = plan.settings, at = plan.at_retirement, ri = s.retire_in_years;
   for (const sl of FI_SLIDERS) {
     if (sl.key !== activeKey) F.inputs[sl.key].value = +(s[sl.key] * sl.scale).toFixed(4);
-    F.outs[sl.key].textContent = sl.fmt(s[sl.key], plan, age);
+    F.outs[sl.key].textContent = sl.fmt(s[sl.key], plan, ages);
   }
   const yrs = plan.years_to_fi;
   F.sub.textContent = `Investable assets grow ${pctT(s.real_return)} a year after inflation, plus ${money(a.annual_investment_contributions)} / year of contributions ` +
@@ -490,7 +500,7 @@ function fillFi(plan, activeKey) {
     (a.continuing_income_monthly ? `Target: ${+(1 / s.withdrawal_rate).toFixed(1)}× the yearly spending that other income (${money(a.continuing_income_monthly)} / month) doesn't cover (${money(plan.target)}). `
       : `Target: ${+(1 / s.withdrawal_rate).toFixed(1)}× annual spending (${money(plan.target)}). `) +
     (yrs == null ? "Not reached within 80 years at current contributions." : yrs === 0 ? "Target already reached." : `Reached in about ${yrs} years if you keep contributing.`);
-  const when = (ri === 0 ? "If you stop working now" : `If you stop working in ${ri} years`) + (age ? ` (age ${age + ri})` : "");
+  const when = (ri === 0 ? "If you stop working now" : `If you stop working in ${ri} years`) + agesText(ages, ri);
   F.summary.replaceChildren(
     el("div", { class: "lab", text: `${when}, in today's dollars:` }),
     el("div", { class: "big", text: `≈ ${money(at.monthly_take_home)} / month take-home` }),
@@ -498,7 +508,7 @@ function fillFi(plan, activeKey) {
       (at.other_income_monthly ? `, plus ${money(at.other_income_monthly)} of other income that continues` : "") +
       (at.share_of_spending != null ? ` · ${pct(at.share_of_spending)} of today's spending (${money(a.spending_monthly)} / month)` : "") }),
     el("div", { class: "line", text: at.lasts_years == null ? "At this withdrawal the money lasts 30+ years."
-      : `At this withdrawal the money runs out after ${at.lasts_years} years` + (age ? ` (age ${age + ri + at.lasts_years}).` : ".") }),
+      : `At this withdrawal the money runs out after ${at.lasts_years} years${agesText(ages, ri + at.lasts_years)}.` }),
     el("p", { class: "note", text: `Only withdrawals from 401(k), 403(b), and traditional IRAs (${pct(a.fi_base.tax_deferred_share)} of your investments today) are taxed, at the rate above. ` +
       "Roth and HSA withdrawals are tax-free; brokerage gains tax isn't included. Social Security or a pension counts only if entered under Other income with \"After work\" checked. " +
       "Cash accounts and real estate aren't counted." }));
@@ -511,7 +521,7 @@ function fillFi(plan, activeKey) {
 function drawProjection() {
   const host = S.root?.querySelector("#ch-proj"), plan = S.fiPlan ?? S.analysis?.amounts.fi_plan;
   if (!host || !plan) return;
-  const proj = plan.projection, ri = plan.settings.retire_in_years, age = S.analysis.amounts.fi_base.age, y0 = new Date().getFullYear();
+  const proj = plan.projection, ri = plan.settings.retire_in_years, ages = S.analysis.amounts.fi_base.ages, y0 = new Date().getFullYear();
   lineChart(host, {
     xs: proj.map(p => p.year), zero: true, markers: false, xStep: 5,
     series: [
@@ -520,7 +530,7 @@ function drawProjection() {
     ],
     yFmt: moneyShort, yFmtLong: money,
     xTickFmt: x => x === 0 ? "Now" : "+" + x + " yr",
-    xLabel: x => (x === 0 ? "Now" : `Year ${x} (${y0 + x}${age ? `, age ${age + x}` : ""})`) + (x >= ri ? " · not working" : ""),
+    xLabel: x => (x === 0 ? "Now" : `Year ${x}, ${y0 + x}${agesText(ages, x)}`) + (x >= ri ? " · not working" : ""),
     annotate: (svg, X, Y, { m, H }) => {
       sv("line", { x1: X(ri), x2: X(ri), y1: m.t, y2: H - m.b, stroke: css("--text-3"), "stroke-width": 1, "stroke-dasharray": "2 3" }, svg);
       sv("text", { x: X(ri) + (ri === 0 ? 4 : -4), y: m.t + 10, "text-anchor": ri === 0 ? "start" : "end" }, svg).textContent = "Stop working";

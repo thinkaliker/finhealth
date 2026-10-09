@@ -60,12 +60,14 @@ JSON. See `public/example.json`.
 {
   "version": 1,
   "currency":   "USD",                                           // optional; ISO code or "none"; set in the header
-  "profile":    { "age": 34 },                                   // optional
-  "income":     { "take_home_monthly": 6200, "gross_annual": 115000 },  // or "take_home_biweekly": 2860 per paycheck
-  "retirement": { "employee_contribution_pct": 0.06, "employer_match_rate": 0.5,
-                  "employer_match_limit_pct": 0.06, "employer_nonelective_pct": 0 },
-  // tiered match instead of rate + limit: 100% of the first 4%, then 50% of the next 4%
-  // "retirement": { ..., "match_tiers": [{ "rate": 1, "pct": 0.04 }, { "rate": 0.5, "pct": 0.04 }] },
+  "people": [                                                    // one entry per earner; the rest is shared
+    { "name": "", "age": 34,                                     // name and age optional
+      "income":     { "take_home_monthly": 6200, "gross_annual": 115000 },  // or "take_home_biweekly": 2860 per paycheck
+      "retirement": { "employee_contribution_pct": 0.06, "employer_match_rate": 0.5,
+                      "employer_match_limit_pct": 0.06, "employer_nonelective_pct": 0 } }
+    // tiered match instead of rate + limit: 100% of the first 4%, then 50% of the next 4%
+    // "retirement": { ..., "match_tiers": [{ "rate": 1, "pct": 0.04 }, { "rate": 0.5, "pct": 0.04 }] }
+  ],
   "savings":    { "monthly_to_investments": 800, "monthly_to_cash": 300 },  // optional
   "other_income": [{ "name": "Rent", "amount": 2200, "continues": true }],  // optional; monthly
   "properties": [                                                // optional; "residence": you live there
@@ -88,6 +90,8 @@ JSON. See `public/example.json`.
 }
 ```
 
+People: each earner has their own `income` (take-home, gross salary, pay period, other paycheck deductions), `retirement` (401k contribution and employer match), and optional `name` and `age`. Expenses, savings, other income, debts, real estate, accounts, and history are shared by the household. Results add everyone up, and check taxes withheld and employer match for each person. Names appear only on the page; the LLM export calls people "person 1", "person 2". Files with the older top-level `income`, `retirement`, and `profile.age` load as person 1.
+
 Rates and percentages are fractions (`0.045` = 4.5%); the web form shows them as percents. Take-home pay is either `take_home_monthly` or `take_home_biweekly` (one paycheck), not both; biweekly is averaged to monthly as × 26 ÷ 12, so months with a third paycheck are spread across the year. Optional `other_deductions_monthly` / `other_deductions_biweekly` (health premiums, HSA/FSA, anything withheld besides taxes and 401k) works the same way. Taxes withheld are estimated as gross − your 401k − other deductions − take-home, so `gross_annual` should be before deductions and should include a bonus only if take-home does. Account types: `cash`, `hysa`, `cd`, `brokerage`, `401k`, `403b`, `traditional_ira`, `roth_ira`, `roth_401k`, `hsa`. Investment accounts take an `allocation` (`stocks`, `bonds`, `cash`, `single_stock`, `other`) summing to 1.
 
 Other income (optional): money besides your paycheck, per month, as received (rent, side work, a pension). It adds to monthly income for cash flow and the savings rate, and to gross income for the debt-to-income checks. `continues: true` means it keeps paying after you stop working: it lowers the FI target and adds to take-home after you stop.
@@ -105,8 +109,8 @@ CDs: `renews: true` models a ladder rung. Once `maturity_date` passes, the next 
 | Cash flow | (income − expenses − housing − debt minimums) / income; income = take-home + other income | negative = act |
 | Savings rate | (saved from pay + employee 401k + employer 401k) / (income + employee 401k + employer 401k) | <10% act, 10–20% watch |
 | Emergency fund | (checking + HYSA + CDs at accessible value) / (expenses + housing + debt minimums) | <3 mo act, 3–6 watch |
-| Taxes withheld | (gross − employee 401k − other deductions − take-home) / gross | info; negative = watch (inputs don't add up) |
-| Match captured | match at your deferral / maximum match (single rate + limit, or tiers) | <100% act |
+| Taxes withheld (per person) | (gross − employee 401k − other deductions − take-home) / gross | info; negative = watch (inputs don't add up) |
+| Match captured (per person) | match at their deferral / maximum match (single rate + limit, or tiers) | <100% act |
 | Debt-to-income | debt minimums (excluding housing) / gross monthly income (salary + other income) | >36% act, 15–36% watch |
 | Housing cost (with a residence) | (loan payments + property costs where you live) / gross monthly income | >36% act, 28–36% watch |
 | Debt-to-income incl. housing (with property) | (payments + costs for every property + debt minimums) / gross monthly income | >43% act, 36–43% watch |

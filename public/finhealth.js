@@ -116,13 +116,50 @@ function num(v, where) {
   return n;
 }
 
+/** One earner: income (pay, deductions), 401(k), and age. `who` prefixes error messages when there are several people. */
+function normPerson(p, who) {
+  const income = { ...(p.income ?? {}) }, retirement = { ...(p.retirement ?? {}) };
+  // retirement.match_tiers (optional): [{rate, pct}] = "rate match on the next pct of pay"; replaces the single rate + limit
+  const tiers = retirement.match_tiers;
+  delete retirement.match_tiers;
+  for (const [sec, o] of [["income", income], ["retirement", retirement]])
+    for (const k of Object.keys(o)) o[k] = num(o[k], `${who}${sec}.${k}`);
+  if (tiers != null) {
+    if (!Array.isArray(tiers)) throw new Error(`${who}retirement.match_tiers must be a list`);
+    if (retirement.employer_match_rate || retirement.employer_match_limit_pct)
+      throw new Error(`${who}retirement: give employer_match_rate and employer_match_limit_pct, or match_tiers, not both`);
+    delete retirement.employer_match_rate; delete retirement.employer_match_limit_pct;
+    retirement.match_tiers = tiers.map((t, i) => {
+      const rate = num(t.rate, `${who}match tier ${i + 1} rate`), pct = num(t.pct, `${who}match tier ${i + 1} pct`);
+      if (!(rate >= 0 && rate <= 5 && pct >= 0 && pct < 1))
+        throw new Error(`${who}match tier ${i + 1}: rate and pct are fractions, e.g. rate 0.5 and pct 0.04 for "50% of the next 4%"`);
+      return { rate, pct };
+    }).filter(t => t.pct > 0);
+  }
+  // take-home and other deductions are per month or per biweekly paycheck; the key that is present says which
+  for (const base of ["take_home", "other_deductions"]) {
+    if (!(`${base}_biweekly` in income)) continue;
+    if (income[`${base}_monthly`]) throw new Error(`${who}income: give ${base}_monthly or ${base}_biweekly, not both`);
+    delete income[`${base}_monthly`];
+  }
+  const out = { name: String(p.name ?? "").trim(), income, retirement };
+  const age = num(p.age, `${who}age`);
+  if (age) out.age = age;
+  return out;
+}
+
 /** Validate and coerce input from a JSON file or the web form. Throws Error with a readable message. */
 export function normalize(input) {
   const d = JSON.parse(JSON.stringify(input ?? {}));
   if (typeof d !== "object" || Array.isArray(d)) throw new Error("data must be a JSON object");
-  // retirement.match_tiers (optional): [{rate, pct}] = "rate match on the next pct of pay"; replaces the single rate + limit
-  const tiers = d.retirement?.match_tiers;
-  if (d.retirement) delete d.retirement.match_tiers;
+  // people: each earner's pay, 401(k), and age. Older files keep one person's at the top level; that becomes person 1.
+  if (d.income || d.retirement || d.profile?.age) {
+    if (d.people) throw new Error('give "people", or the older top-level income and retirement, not both');
+    d.people = [{ name: "", age: d.profile?.age, income: d.income, retirement: d.retirement }];
+  }
+  delete d.income; delete d.retirement;
+  if (d.profile) { delete d.profile.age; if (!Object.keys(d.profile).length) delete d.profile; }
+  d.people = (d.people ?? []).map((p, i, all) => normPerson(p ?? {}, all.length > 1 ? `${p?.name || `person ${i + 1}`}: ` : ""));
   // the older single "home" section becomes one residence in "properties"
   if (d.home) {
     if (d.properties) throw new Error('give "properties" or the older "home" section, not both');
@@ -131,21 +168,9 @@ export function normalize(input) {
       loans: hasLoan ? [{ name: "Mortgage", balance: h.mortgage_balance, apr: h.mortgage_apr, payment: h.mortgage_payment }] : [] }];
     delete d.home;
   }
-  for (const sec of ["income", "retirement", "savings", "profile", "fi"]) {
+  for (const sec of ["savings", "profile", "fi"]) {
     if (d[sec] == null) continue;
     for (const k of Object.keys(d[sec])) d[sec][k] = num(d[sec][k], `${sec}.${k}`);
-  }
-  if (tiers != null) {
-    const r = d.retirement;
-    if (!Array.isArray(tiers)) throw new Error("retirement.match_tiers must be a list");
-    if (r.employer_match_rate || r.employer_match_limit_pct) throw new Error("retirement: give employer_match_rate and employer_match_limit_pct, or match_tiers, not both");
-    delete r.employer_match_rate; delete r.employer_match_limit_pct;
-    r.match_tiers = tiers.map((t, i) => {
-      const rate = num(t.rate, `match tier ${i + 1} rate`), pct = num(t.pct, `match tier ${i + 1} pct`);
-      if (!(rate >= 0 && rate <= 5 && pct >= 0 && pct < 1))
-        throw new Error(`match tier ${i + 1}: rate and pct are fractions, e.g. rate 0.5 and pct 0.04 for "50% of the next 4%"`);
-      return { rate, pct };
-    }).filter(t => t.pct > 0);
   }
   if (d.currency != null) {
     const c = String(d.currency).trim();
@@ -159,13 +184,6 @@ export function normalize(input) {
         throw new Error(`fi.${k} must be between ${lo} and ${hi}` + (k === "retire_in_years" ? "" : " (a fraction, e.g. 0.04 for 4%)"));
     if ("retire_in_years" in d.fi) d.fi.retire_in_years = Math.round(d.fi.retire_in_years);
     if (!Object.keys(d.fi).length) delete d.fi;
-  }
-  if (d.profile && d.profile.age === 0) delete d.profile.age;
-  // take-home and other deductions are per month or per biweekly paycheck; the key that is present says which
-  for (const base of ["take_home", "other_deductions"]) {
-    if (!d.income || !(`${base}_biweekly` in d.income)) continue;
-    if (d.income[`${base}_monthly`]) throw new Error(`income: give ${base}_monthly or ${base}_biweekly, not both`);
-    delete d.income[`${base}_monthly`];
   }
   if (d.savings && Object.keys(d.savings).length === 0) delete d.savings;
 
@@ -317,25 +335,29 @@ export function payoffMonths(balance, apr, payment) {
  */
 export function analyze(d, today = todayISO()) {
   const assumptions = [];
-  const inc = d.income ?? {}, ret = d.retirement ?? {};
-  const takeHome = perMonth(inc, "take_home");
-  if ("take_home_biweekly" in inc) assumptions.push("Take-home pay was entered per biweekly paycheck and averaged to monthly (26 paychecks over 12 months); two months a year have a third paycheck.");
-  const grossM = (inc.gross_annual ?? 0) / 12;
+  // per earner: pay, 401(k) flows, and taxes withheld (what's left of gross after take-home, 401(k), and other deductions)
+  const people = (d.people ?? []).map(p => {
+    const inc = p.income, ret = p.retirement;
+    const takeHome = perMonth(inc, "take_home"), gross = (inc.gross_annual ?? 0) / 12, otherDed = perMonth(inc, "other_deductions");
+    const empPct = ret.employee_contribution_pct ?? 0, employee401k = empPct * gross;
+    const employer401k = (matchPct(ret, empPct) + (ret.employer_nonelective_pct ?? 0)) * gross;
+    const fullMatch = matchPct(ret, Infinity);
+    return { name: p.name, age: p.age ?? null, ret, biweekly: "take_home_biweekly" in inc, take_home: takeHome, gross, other_deductions: otherDed,
+      employee_401k: employee401k, employer_401k: employer401k, taxes: gross > 0 && takeHome > 0 ? gross - employee401k - otherDed - takeHome : null,
+      match_captured: fullMatch ? matchPct(ret, empPct) / fullMatch : null, full_match_at: fullMatchAt(ret) };
+  });
+  const multi = people.length > 1, total = k => sum(people.map(p => p[k]));
+  const takeHome = total("take_home"), grossM = total("gross"), otherDed = total("other_deductions");
+  const employee401k = total("employee_401k"), employer401k = total("employer_401k");
+  const taxed = people.filter(p => p.taxes !== null), taxes = taxed.length ? sum(taxed.map(p => p.taxes)) : null;
+  const taxedGross = sum(taxed.map(p => p.gross));
+  if (people.some(p => p.biweekly)) assumptions.push("Take-home pay was entered per biweekly paycheck and averaged to monthly (26 paychecks over 12 months); two months a year have a third paycheck.");
   const expenses = {};
   for (const r of d.expenses ?? []) expenses[r.name] = (expenses[r.name] ?? 0) + r.amount;
   const expTotal = sum(Object.values(expenses));
   const debts = d.debts ?? [], accounts = d.accounts ?? [];
   const debtPay = sum(debts.map(x => x.min_payment));
   const debtBal = sum(debts.map(x => x.balance));
-
-  // 401k flows
-  const empPct = ret.employee_contribution_pct ?? 0;
-  const employee401k = empPct * grossM;
-  const employer401k = (matchPct(ret, empPct) + (ret.employer_nonelective_pct ?? 0)) * grossM;
-
-  // taxes withheld: what's left of gross pay after take-home, your 401(k), and other paycheck deductions
-  const otherDed = perMonth(inc, "other_deductions");
-  const taxes = grossM > 0 && takeHome > 0 ? grossM - employee401k - otherDed - takeHome : null;
 
   // other income (rent, side work, a pension) adds to monthly income and, for ratios, to gross income
   const otherIncome = sum((d.other_income ?? []).map(o => o.amount));
@@ -411,8 +433,6 @@ export function analyze(d, today = todayISO()) {
   const efMonths = burn ? emergencyCash / burn : null;
   const liquidMonths = burn ? liquid / burn : null;
   const dti = ratio(debtPay, grossIncomeM);
-  const fullMatch = matchPct(ret, Infinity), fullAt = fullMatchAt(ret);
-  const matchCaptured = fullMatch ? matchPct(ret, empPct) / fullMatch : null;
   const hiDebts = debts.filter(x => x.apr >= HIGH_INTEREST_APR);
   const hiDebtRatio = ratio(sum(hiDebts.map(x => x.balance)), grossIncomeM * 12);
   const stockPct = ratio((alloc.stocks ?? 0) + (alloc.single_stock ?? 0), investable);
@@ -421,7 +441,8 @@ export function analyze(d, today = todayISO()) {
   // financial independence: invested contributions (not cash savings) until you stop working, then withdrawals
   const annualContrib = (savedFromPay - (sv ? sv.monthly_to_cash ?? 0 : 0) + employee401k + employer401k) * 12;
   const fiBase = { investable, annual_contrib: annualContrib, annual_spend: burn * 12, continuing_income_annual: continuingIncome * 12,
-    tax_deferred_share: investable > 0 ? buckets.tax_deferred / investable : 0, age: d.profile?.age ?? null };
+    tax_deferred_share: investable > 0 ? buckets.tax_deferred / investable : 0,
+    age: people.find(p => p.age)?.age ?? null, ages: people.map(p => p.age) };
   const plan = fiPlan(fiBase, d.fi);
   // target 0 with spending > 0: income that continues already covers it
   const yearsToFi = plan.years_to_fi, fiProgress = plan.target ? investable / plan.target : burn > 0 ? 1 : null;
@@ -433,6 +454,7 @@ export function analyze(d, today = todayISO()) {
   const amounts = {
     take_home_monthly: takeHome, gross_monthly: grossM, taxes_monthly: taxes, other_deductions_monthly: otherDed,
     other_income_monthly: otherIncome, continuing_income_monthly: continuingIncome, income_monthly: income,
+    people: people.map(({ ret, ...p }) => p), // per earner: name, age, take_home, gross, taxes, 401(k) flows
     expenses_monthly: expTotal, debt_payments_monthly: debtPay,
     debt_balance: debtBal, employee_401k_monthly: employee401k, employer_401k_monthly: employer401k,
     saved_from_pay_monthly: savedFromPay, surplus_monthly: surplus, cash, investable, assets, net_worth: netWorth,
@@ -445,7 +467,10 @@ export function analyze(d, today = todayISO()) {
 
   const ratios = {
     savings_rate: savingsRate,
-    taxes_share_of_gross: taxes === null ? null : taxes / grossM,
+    taxes_share_of_gross: taxes === null ? null : taxes / taxedGross,
+    people: multi ? people.map(p => ({ share_of_household_take_home: ratio(p.take_home, takeHome), share_of_household_gross: ratio(p.gross, grossM),
+      taxes_share_of_gross: p.taxes === null ? null : p.taxes / p.gross, contribution_pct: p.ret.employee_contribution_pct ?? 0,
+      match_captured: p.match_captured })) : null, // listed as person 1, 2, ... (names stay local)
     expenses_share_of_income: ratio(expTotal, income),
     debt_payments_share_of_income: ratio(debtPay, income),
     surplus_share_of_income: ratio(surplus, income),
@@ -491,27 +516,34 @@ export function analyze(d, today = todayISO()) {
 
   // ---- checks (amount-free details)
   const checks = [];
-  const C = (key, label, status, value, unit, detail) => checks.push({ key, label, status, value, unit, detail });
+  // `person` (an index) marks a per-earner check when there are several; the page shows the name, the export "person N"
+  const C = (key, label, status, value, unit, detail, person) =>
+    checks.push({ key, label, status, value, unit, detail, ...(multi && person != null ? { person } : {}) });
   const outflows = props.length ? "expenses, housing, and minimum debt payments" : "expenses and minimum debt payments";
   const incomeWord = otherIncome ? "take-home plus other income" : "take-home pay";
   if (surplus < 0) C("cash_flow", "Monthly cash flow", "act", ratio(surplus, income), "%", `Monthly ${outflows} exceed ${incomeWord}.`);
   else C("cash_flow", "Monthly cash flow", "ok", ratio(surplus, income), "%", `${incomeWord[0].toUpperCase() + incomeWord.slice(1)} covers ${outflows}.`);
   if (savingsRate !== null) C("savings_rate", "Savings rate", savingsRate >= 0.2 ? "ok" : savingsRate >= 0.1 ? "watch" : "act", savingsRate, "%",
     `Includes 401k employee+employer and savings from ${incomeWord}. Benchmarks: <10% low, 10-20% moderate, 20%+ strong.`);
-  if (taxes !== null) {
-    const t = taxes / grossM;
+  for (const [i, p] of people.entries()) {
+    if (p.taxes === null) continue;
+    const t = p.taxes / p.gross;
     if (t < 0) C("taxes", "Taxes withheld (share of gross)", "watch", t, "%",
-      "Take-home plus 401(k) and other deductions add up to more than gross salary. Check that gross is before any deductions, and that a bonus is counted in both or neither.");
+      "Take-home plus 401(k) and other deductions add up to more than gross salary. Check that gross is before any deductions, and that a bonus is counted in both or neither.", i);
     else C("taxes", "Taxes withheld (share of gross)", "info", t, "%",
-      "Gross pay minus take-home, your 401(k), and other paycheck deductions: federal, state, and payroll taxes. This is withholding, not the final tax bill." +
-      (otherDed ? "" : " No other deductions entered, so any health premiums or HSA/FSA withheld from pay are counted here too."));
+      "Gross pay minus take-home, 401(k), and other paycheck deductions: federal, state, and payroll taxes. This is withholding, not the final tax bill." +
+      (p.other_deductions ? "" : " No other deductions entered, so any health premiums or HSA/FSA withheld from pay are counted here too."), i);
   }
   if (efMonths !== null) C("emergency_fund", "Emergency fund", efMonths >= 6 ? "ok" : efMonths >= 3 ? "watch" : "act", efMonths, "months",
     `Cash divided by monthly ${outflows}. Common target 3-6 months; more if income is variable.` +
     (cds.length ? ` Includes CDs at early-withdrawal value; checking and savings alone cover ${liquidMonths.toFixed(1)} months.` : ""));
-  if (matchCaptured !== null) C("match", "Employer match captured", matchCaptured >= 0.999 ? "ok" : "act", matchCaptured, "%",
-    `Share of available employer match you are contributing enough to receive. Contributing ${+(fullAt * 100).toFixed(2)}% of salary gets the full match` +
-    (ret.match_tiers ? ` (tiered: ${ret.match_tiers.map((t, i) => `${+(t.rate * 100).toFixed(2)}% of the ${i ? "next" : "first"} ${+(t.pct * 100).toFixed(2)}%`).join(", then ")}).` : "."));
+  for (const [i, p] of people.entries()) {
+    if (p.match_captured === null) continue;
+    const tiers = p.ret.match_tiers;
+    C("match", "Employer match captured", p.match_captured >= 0.999 ? "ok" : "act", p.match_captured, "%",
+      `Share of available employer match being contributed for. Contributing ${+(p.full_match_at * 100).toFixed(2)}% of salary gets the full match` +
+      (tiers ? ` (tiered: ${tiers.map((t, j) => `${+(t.rate * 100).toFixed(2)}% of the ${j ? "next" : "first"} ${+(t.pct * 100).toFixed(2)}%`).join(", then ")}).` : "."), i);
+  }
   const grossWord = otherIncome ? "gross income (salary plus other income)" : "gross income";
   if (dti !== null) C("dti", props.length ? "Debt-to-income, excluding housing" : "Debt-to-income (payments / gross)", dti < 0.15 ? "ok" : dti <= 0.36 ? "watch" : "act", dti, "%",
     "Under 15% comfortable; lenders commonly cap around 36%.");
@@ -535,7 +567,7 @@ export function analyze(d, today = todayISO()) {
   else C("high_interest_debt", "High-interest debt", "ok", 0, "%", `No debts at or above ${fmtPct(HIGH_INTEREST_APR)} APR.`);
   if (singlePct) C("concentration", "Single-stock concentration", singlePct <= 0.1 ? "ok" : singlePct <= 0.2 ? "watch" : "act", singlePct, "%",
     "Share of investable assets in one company. Common guidance keeps this under 10%.");
-  const age = d.profile?.age;
+  const age = people.find(p => p.age)?.age; // the first earner with an age
   if (age && stockPct !== null) {
     const ref = Math.max(0, Math.min(1, (110 - age) / 100)), gap = stockPct - ref;
     C("allocation", "Stock share vs age heuristic", Math.abs(gap) <= 0.15 ? "ok" : "watch", stockPct, "%",
@@ -629,7 +661,13 @@ export function exportMarkdown(A) {
     "All figures are ratios, durations, or indexes. No currency amounts are included. " +
     "Use this to give general, educational observations; the user's full numbers stay local.",
     "", "## Health checks", "", "| Check | Status | Value | Notes |", "|---|---|---|---|"];
-  for (const c of A.checks) L.push(`| ${c.label} | ${c.status.toUpperCase()} | ${fmtValue(c.value, c.unit)} | ${c.detail} |`);
+  for (const c of A.checks) L.push(`| ${c.label}${c.person != null ? ` (person ${c.person + 1})` : ""} | ${c.status.toUpperCase()} | ${fmtValue(c.value, c.unit)} | ${c.detail} |`);
+  if (r.people) {
+    L.push("", "## Household (two or more earners; shared expenses, debts, property, and accounts)", "");
+    r.people.forEach((p, i) => L.push(`- person ${i + 1}: ${fmtValue(p.share_of_household_take_home, "%")} of household take-home, ` +
+      `${fmtValue(p.share_of_household_gross, "%")} of gross salary; taxes withheld ${fmtValue(p.taxes_share_of_gross, "%")} of their gross; ` +
+      `401(k) contribution ${pctTxt(p.contribution_pct)}, employer match captured ${fmtValue(p.match_captured, "%")}`));
+  }
   L.push("", "## Cash flow shape (share of monthly income: take-home pay plus other income)", "");
   if (r.other_income_share_of_income) L.push(`- other income (e.g. rent) share of income: ${fmtValue(r.other_income_share_of_income, "%")}; ` +
     `the part that continues after stopping work covers ${fmtValue(r.continuing_income_share_of_spending, "%")} of current spending`);
@@ -705,6 +743,9 @@ export function reportText(A) {
   for (const k of keys) {
     rows.push([k, a[k]]);
     if (k === "employer_401k_monthly" && a.taxes_monthly !== null) rows.push(["taxes_withheld_monthly", a.taxes_monthly]);
+    if (k === "employer_401k_monthly" && a.people.length > 1) a.people.forEach((p, i) => rows.push(
+      [`  ${p.name || `person ${i + 1}`}: take-home`, p.take_home], ["    gross", p.gross], ...(p.taxes !== null ? [["    taxes withheld", p.taxes]] : []),
+      ["    401(k) yours + employer", p.employee_401k + p.employer_401k]));
     if (k === "employer_401k_monthly" && a.other_deductions_monthly) rows.push(["other_deductions_monthly", a.other_deductions_monthly]);
     if (k === "take_home_monthly" && a.other_income_monthly) rows.push(["other_income_monthly", a.other_income_monthly]);
     if (k === "debt_payments_monthly" && a.real_estate) rows.push(["housing_monthly", a.real_estate.housing]);

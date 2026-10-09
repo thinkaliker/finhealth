@@ -64,31 +64,81 @@
 <main class="layout" x-show="!onboarding" x-cloak>
   <section data-pane="inputs" :class="{ active: tab === 'inputs' }" aria-label="Inputs">
 
-    <details class="sec" id="sec-income" open>
-      <summary>Income <span class="sum" x-text="sum('income')"></span></summary>
-      <div class="secbody">
-        <div class="field"><div class="lblsel"><label for="f-th">Take-home pay</label>
-            <select class="txt" aria-label="Pay period" @change="setPayPeriod($event)">
-              <template x-for="p in payPeriods" :key="p.value">
-                <option :value="p.value" :selected="isPeriod(p)" x-text="p.label"></option>
-              </template>
-            </select></div>
-          <template x-if="isMonthly()">
-            <div class="num money"><input type="text" id="f-th" inputmode="decimal" autocomplete="off" x-money:take_home_monthly="data.income"></div></template>
-          <template x-if="isBiweekly()">
-            <div class="num money"><input type="text" id="f-th" inputmode="decimal" autocomplete="off" x-money:take_home_biweekly="data.income"></div></template>
-          <div class="hint" x-text="takeHomeHint()"></div></div>
-        <div class="field"><label for="f-gross">Gross salary / year</label>
-          <div class="num money"><input type="text" id="f-gross" inputmode="decimal" autocomplete="off" x-money:gross_annual="data.income"></div>
-          <div class="hint">Before any deductions. Needed for 401k amounts, taxes, and debt-to-income.</div></div>
-        <div class="field"><label for="f-od" x-text="deductionsLabel()"></label>
-          <template x-if="isMonthly()">
-            <div class="num money"><input type="text" id="f-od" inputmode="decimal" autocomplete="off" x-money:other_deductions_monthly="data.income"></div></template>
-          <template x-if="isBiweekly()">
-            <div class="num money"><input type="text" id="f-od" inputmode="decimal" autocomplete="off" x-money:other_deductions_biweekly="data.income"></div></template>
-          <div class="hint">Optional. Health, dental, vision premiums, HSA/FSA: anything withheld besides taxes and 401(k). Without it, these count as taxes.</div></div>
+    <template x-for="(person, pi) in data.people" :key="rowKey(person)">
+      <div class="person">
+        <details class="sec" open>
+          <summary><span x-text="personTitle('Income', person, pi)"></span> <span class="sum" x-text="personSum('income', person)"></span></summary>
+          <div class="secbody">
+            <div class="field" x-show="multiPerson()"><label :for="inputId('name', person)">Name</label>
+              <input class="txt" type="text" :id="inputId('name', person)" placeholder="Shown only on this page" autocomplete="off" x-model="person.name"></div>
+            <div class="field"><div class="lblsel"><label :for="inputId('th', person)">Take-home pay</label>
+                <select class="txt" aria-label="Pay period" @change="setPayPeriod(person, $event)">
+                  <template x-for="p in payPeriods" :key="p.value">
+                    <option :value="p.value" :selected="isPeriod(person, p)" x-text="p.label"></option>
+                  </template>
+                </select></div>
+              <template x-if="isMonthly(person)">
+                <div class="num money"><input type="text" :id="inputId('th', person)" inputmode="decimal" autocomplete="off" x-money:take_home_monthly="person.income"></div></template>
+              <template x-if="isBiweekly(person)">
+                <div class="num money"><input type="text" :id="inputId('th', person)" inputmode="decimal" autocomplete="off" x-money:take_home_biweekly="person.income"></div></template>
+              <div class="hint" x-text="takeHomeHint(person)"></div></div>
+            <div class="field"><label :for="inputId('gross', person)">Gross salary / year</label>
+              <div class="num money"><input type="text" :id="inputId('gross', person)" inputmode="decimal" autocomplete="off" x-money:gross_annual="person.income"></div>
+              <div class="hint">Before any deductions. Needed for 401k amounts, taxes, and debt-to-income.</div></div>
+            <div class="field"><label :for="inputId('od', person)" x-text="deductionsLabel(person)"></label>
+              <template x-if="isMonthly(person)">
+                <div class="num money"><input type="text" :id="inputId('od', person)" inputmode="decimal" autocomplete="off" x-money:other_deductions_monthly="person.income"></div></template>
+              <template x-if="isBiweekly(person)">
+                <div class="num money"><input type="text" :id="inputId('od', person)" inputmode="decimal" autocomplete="off" x-money:other_deductions_biweekly="person.income"></div></template>
+              <div class="hint">Optional. Health, dental, vision premiums, HSA/FSA: anything withheld besides taxes and 401(k). Without it, these count as taxes.</div></div>
+            <div class="field"><label :for="inputId('age', person)">Age</label>
+              <div class="num"><input type="number" :id="inputId('age', person)" step="1" min="0" inputmode="numeric" x-model.number="person.age"></div>
+              <div class="hint">Optional. Enables the stock-share vs age check and ages in the retirement projection.</div></div>
+            <div class="addrow" x-show="canRemovePerson(pi)"><button class="btn small danger" type="button" @click="removePerson(pi)">Remove this person</button></div>
+          </div>
+        </details>
+
+        <details class="sec" open>
+          <summary><span x-text="personTitle('401(k)', person, pi)"></span> <span class="sum" x-text="personSum('retirement', person)"></span></summary>
+          <div class="secbody">
+            <div class="field"><label :for="inputId('emp', person)">401k contribution</label>
+              <div class="num pct"><input :id="inputId('emp', person)" type="number" step="any" inputmode="decimal" :value="pctVal(person.retirement, 'employee_contribution_pct')" @input="setPct(person.retirement, 'employee_contribution_pct', $event)"></div>
+              <div class="hint">Percent of gross salary.</div></div>
+            <label class="toggle"><input type="checkbox" :checked="hasTiers(person)" @change="toggleTiers(person, $event)"> Match has tiers (e.g. 100% on the first 4%, then 50% on the next 4%)</label>
+            <template x-if="isSimpleMatch(person)">
+              <div>
+                <div class="field"><label :for="inputId('mr', person)">Employer match rate</label>
+                  <div class="num pct"><input :id="inputId('mr', person)" type="number" step="any" inputmode="decimal" :value="pctVal(person.retirement, 'employer_match_rate')" @input="setPct(person.retirement, 'employer_match_rate', $event)"></div>
+                  <div class="hint">50 means 50¢ per $1 contributed.</div></div>
+                <div class="field"><label :for="inputId('ml', person)">Match applies up to</label>
+                  <div class="num pct"><input :id="inputId('ml', person)" type="number" step="any" inputmode="decimal" :value="pctVal(person.retirement, 'employer_match_limit_pct')" @input="setPct(person.retirement, 'employer_match_limit_pct', $event)"></div>
+                  <div class="hint">Percent of salary the match covers.</div></div>
+              </div>
+            </template>
+            <template x-if="hasTiers(person)">
+              <div>
+                <template x-for="(t, i) in person.retirement.match_tiers" :key="rowKey(t)">
+                  <div class="row tier">
+                    <div class="num pct"><input type="number" step="any" min="0" inputmode="decimal" aria-label="Match rate" :value="pctVal(t, 'rate')" @input="setPct(t, 'rate', $event)"></div>
+                    <span x-text="tierText(i)"></span>
+                    <div class="num pct"><input type="number" step="any" min="0" inputmode="decimal" aria-label="Of this share of salary" :value="pctVal(t, 'pct')" @input="setPct(t, 'pct', $event)"></div>
+                    <span>of salary</span>
+                    <button class="btn icon" type="button" aria-label="Remove tier" title="Remove" @click="removeTier(person, i)">✕</button>
+                  </div>
+                </template>
+                <div class="addrow"><button class="btn small" type="button" @click="addTier(person)">+ Tier</button></div>
+              </div>
+            </template>
+            <div class="field"><label :for="inputId('ne', person)">Fixed employer contribution</label>
+              <div class="num pct"><input :id="inputId('ne', person)" type="number" step="any" inputmode="decimal" :value="pctVal(person.retirement, 'employer_nonelective_pct')" @input="setPct(person.retirement, 'employer_nonelective_pct', $event)"></div>
+              <div class="hint">Paid regardless of contributions.</div></div>
+            <div class="note" x-show="personSum('match', person)" x-text="personSum('match', person)"></div>
+          </div>
+        </details>
       </div>
-    </details>
+    </template>
+    <div class="addrow addperson"><button class="btn small" type="button" @click="addPerson()">+ Add a person</button>
+      <span class="note">A second earner: their own pay and 401(k). Expenses, debts, property, and accounts are shared.</span></div>
 
     <details class="sec" id="sec-other-income" open>
       <summary>Other income <span class="sum" x-text="sum('other_income')"></span></summary>
@@ -105,44 +155,6 @@
           </div>
         </template>
         <div class="addrow"><button class="btn small" type="button" @click="addOtherIncome()">+ Income</button></div>
-      </div>
-    </details>
-
-    <details class="sec" id="sec-retirement" open>
-      <summary>401(k) <span class="sum" x-text="sum('retirement')"></span></summary>
-      <div class="secbody">
-        <div class="field"><label for="f-emp">Your 401k contribution</label>
-          <div class="num pct"><input id="f-emp" type="number" step="any" inputmode="decimal" :value="pctVal(data.retirement, 'employee_contribution_pct')" @input="setPct(data.retirement, 'employee_contribution_pct', $event)"></div>
-          <div class="hint">Percent of gross salary.</div></div>
-        <label class="toggle"><input type="checkbox" :checked="hasTiers()" @change="toggleTiers($event)"> Match has tiers (e.g. 100% on the first 4%, then 50% on the next 4%)</label>
-        <template x-if="isSimpleMatch()">
-          <div>
-            <div class="field"><label for="f-mr">Employer match rate</label>
-              <div class="num pct"><input id="f-mr" type="number" step="any" inputmode="decimal" :value="pctVal(data.retirement, 'employer_match_rate')" @input="setPct(data.retirement, 'employer_match_rate', $event)"></div>
-              <div class="hint">50 means 50¢ per $1 you contribute.</div></div>
-            <div class="field"><label for="f-ml">Match applies up to</label>
-              <div class="num pct"><input id="f-ml" type="number" step="any" inputmode="decimal" :value="pctVal(data.retirement, 'employer_match_limit_pct')" @input="setPct(data.retirement, 'employer_match_limit_pct', $event)"></div>
-              <div class="hint">Percent of salary the match covers.</div></div>
-          </div>
-        </template>
-        <template x-if="hasTiers()">
-          <div>
-            <template x-for="(t, i) in data.retirement.match_tiers" :key="rowKey(t)">
-              <div class="row tier">
-                <div class="num pct"><input type="number" step="any" min="0" inputmode="decimal" aria-label="Match rate" :value="pctVal(t, 'rate')" @input="setPct(t, 'rate', $event)"></div>
-                <span x-text="tierText(i)"></span>
-                <div class="num pct"><input type="number" step="any" min="0" inputmode="decimal" aria-label="Of this share of salary" :value="pctVal(t, 'pct')" @input="setPct(t, 'pct', $event)"></div>
-                <span>of salary</span>
-                <button class="btn icon" type="button" aria-label="Remove tier" title="Remove" @click="removeTier(i)">✕</button>
-              </div>
-            </template>
-            <div class="addrow"><button class="btn small" type="button" @click="addTier()">+ Tier</button></div>
-          </div>
-        </template>
-        <div class="field"><label for="f-ne">Fixed employer contribution</label>
-          <div class="num pct"><input id="f-ne" type="number" step="any" inputmode="decimal" :value="pctVal(data.retirement, 'employer_nonelective_pct')" @input="setPct(data.retirement, 'employer_nonelective_pct', $event)"></div>
-          <div class="hint">Paid regardless of your contribution.</div></div>
-        <div class="note" x-show="sum('match')" x-text="sum('match')"></div>
       </div>
     </details>
 
@@ -303,14 +315,6 @@
       </div>
     </details>
 
-    <details class="sec" id="sec-profile" open>
-      <summary>Profile</summary>
-      <div class="secbody">
-        <div class="field"><label for="f-age">Age</label>
-          <div class="num"><input id="f-age" type="number" step="1" min="0" inputmode="numeric" x-model.number="data.profile.age"></div>
-          <div class="hint">Optional. Enables the stock-share vs age check.</div></div>
-      </div>
-    </details>
   </section>
 
   <section data-pane="results" class="results" :class="{ active: tab === 'results' }" aria-label="Results" x-ref="results"></section>

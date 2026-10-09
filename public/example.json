@@ -1,18 +1,21 @@
 {
   "version": 1,
-  "profile": {
-    "age": 34
-  },
-  "income": {
-    "take_home_monthly": 6200,
-    "gross_annual": 115000
-  },
-  "retirement": {
-    "employee_contribution_pct": 0.06,
-    "employer_match_rate": 0.5,
-    "employer_match_limit_pct": 0.06,
-    "employer_nonelective_pct": 0.0
-  },
+  "people": [
+    {
+      "name": "",
+      "age": 34,
+      "income": {
+        "take_home_monthly": 6200,
+        "gross_annual": 115000
+      },
+      "retirement": {
+        "employee_contribution_pct": 0.06,
+        "employer_match_rate": 0.5,
+        "employer_match_limit_pct": 0.06,
+        "employer_nonelective_pct": 0.0
+      }
+    }
+  ],
   "savings": {
     "monthly_to_investments": 800,
     "monthly_to_cash": 300

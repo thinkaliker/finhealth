@@ -221,3 +221,5 @@ pre.export { white-space: pre-wrap; background: var(--bg); border: 1px solid var
 .layout > [data-pane] { min-width: 0; }
 .hidden-input { display: none; }
 
+.addperson { margin: -2px 0 12px; align-items: center; }
+.addperson .note { margin: 0; }

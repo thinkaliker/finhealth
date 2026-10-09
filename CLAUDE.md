@@ -19,7 +19,8 @@ Personal-finance health check. The user enters income, 401(k), expenses, debts, 
 ## Constraints (decided with the user)
 
 - Plain JavaScript only; no React or other large frameworks, no build step. Alpine where it helps. No npm runtime dependencies.
-- Data file is JSON (`public/example.json` shows the schema). Rates are fractions (0.045 = 4.5%).
+- Data file is JSON (`public/example.json` shows the schema). Pay and 401(k) are per person (`people[]`); everything else is household-wide. `normalize()` upgrades older shapes (top-level income/retirement, single `home`), so keep those conversions when changing the schema.
+- Per-person checks carry a `person` index, not a name: the page shows names, the export says "person N". Never put people's names in the export. Rates are fractions (0.045 = 4.5%).
 - The page must stay usable as a static site (GitHub Pages) and under the Node server, from the same code.
 - The CSP in `index.html` blocks third-party scripts and cross-origin requests. Keep it. Alpine's CSP build cannot evaluate inline JS expressions: template attributes may only reference properties and methods defined in `Alpine.data("app", ...)`, plus simple property access, comparisons, and assignments. No arrow functions or template literals in HTML attributes.
 - The export must contain no currency amounts. `test/finhealth.test.js` has a leak check; extend it when adding export fields.

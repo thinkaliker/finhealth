@@ -7,6 +7,8 @@ const EXAMPLE = JSON.parse(fs.readFileSync(new URL("../public/example.json", imp
 const TODAY = "2026-10-08";
 const data = normalize(EXAMPLE);
 const A = analyze(data, TODAY);
+// the example with person 1's income or retirement replaced
+const withPay = (income, retirement) => ({ ...EXAMPLE, people: [{ ...EXAMPLE.people[0], ...(income && { income }), ...(retirement && { retirement }) }] });
 const close = (a, b) => assert.ok(Math.abs(a - b) < 1e-9, `${a} != ${b}`);
 
 const NOT_AMOUNTS = new Set(["months_to_payoff", "apr"]); // counts and rates that sit next to amounts
@@ -74,7 +76,7 @@ test("lapsed CD flagged; bad CD and APR input rejected", () => {
 test("form input is coerced; blank rows dropped; bad allocation rejected", () => {
   const d = normalize({ income: { take_home_monthly: "5000" }, expenses: [{ name: "", amount: 5 }, { name: " rent ", amount: "1" }],
     accounts: [{ name: "a", type: "brokerage", balance: "", allocation: { stocks: 0.7, bonds: 0.3, cash: null } }] });
-  assert.equal(d.income.take_home_monthly, 5000);
+  assert.equal(d.people[0].income.take_home_monthly, 5000);
   assert.deepEqual(d.expenses, [{ name: "rent", amount: 1 }]);
   assert.deepEqual(d.accounts[0].allocation, { stocks: 0.7, bonds: 0.3 });
   assert.throws(() => normalize({ accounts: [{ name: "x", type: "brokerage", balance: 1, allocation: { stocks: 0.5 } }] }), /sums to 0.50/);
@@ -82,7 +84,7 @@ test("form input is coerced; blank rows dropped; bad allocation rejected", () =>
 });
 
 test("take-home per biweekly paycheck averages to monthly; export stays amount-free", () => {
-  const input = { ...EXAMPLE, income: { take_home_biweekly: 2850, gross_annual: 115000 } };
+  const input = withPay({ take_home_biweekly: 2850, gross_annual: 115000 });
   const d = normalize(input);
   const B = analyze(d, TODAY);
   close(B.amounts.take_home_monthly, 2850 * 26 / 12);
@@ -91,7 +93,7 @@ test("take-home per biweekly paycheck averages to monthly; export stays amount-f
   assert.doesNotMatch(exportMarkdown(B), /2,?850|6,?175/);
   assert.deepEqual(normalize(JSON.parse(JSON.stringify(d))), d);
   // the key present picks the period, even at zero; a zero monthly alongside is dropped, a real one is an error
-  assert.deepEqual(normalize({ income: { take_home_monthly: 0, take_home_biweekly: null } }).income, { take_home_biweekly: 0 });
+  assert.deepEqual(normalize({ income: { take_home_monthly: 0, take_home_biweekly: null } }).people[0].income, { take_home_biweekly: 0 });
   assert.throws(() => normalize({ income: { take_home_monthly: 6000, take_home_biweekly: 2800 } }), /not both/);
 });
 
@@ -104,7 +106,7 @@ test("taxes withheld = gross - 401k - other deductions - take-home", () => {
   assert.match(tc.detail, /No other deductions entered/);
 
   // biweekly paychecks with per-paycheck deductions
-  const input = { ...EXAMPLE, income: { take_home_biweekly: 2850, other_deductions_biweekly: 150, gross_annual: 115000 } };
+  const input = withPay({ take_home_biweekly: 2850, other_deductions_biweekly: 150, gross_annual: 115000 });
   const B = analyze(normalize(input), TODAY);
   close(B.amounts.other_deductions_monthly, 150 * 26 / 12);
   close(B.amounts.taxes_monthly, grossM - 575 - 150 * 26 / 12 - 2850 * 26 / 12);
@@ -125,7 +127,7 @@ test("tiered employer match: 100% of the first 4%, 50% of the next 4%, plus a fl
   close(matchPct(ret, 0.10), 0.06);
   close(fullMatchAt(ret), 0.08);
   const grossM = 115000 / 12;
-  const at = emp => analyze(normalize({ ...EXAMPLE, retirement: { ...ret, employee_contribution_pct: emp } }), TODAY);
+  const at = emp => analyze(normalize(withPay(null, { ...ret, employee_contribution_pct: emp })), TODAY);
   const six = at(0.06);
   close(six.amounts.employer_401k_monthly, (0.05 + 0.03) * grossM);
   close(six.ratios.employer_contribution_share_of_gross, 0.08);
@@ -136,14 +138,14 @@ test("tiered employer match: 100% of the first 4%, 50% of the next 4%, plus a fl
   assert.equal(at(0.08).checks.find(c => c.key === "match").status, "ok");
 
   // single rate + limit is the one-tier case; the example (50% up to 6%) is unchanged
-  close(matchPct(EXAMPLE.retirement, 0.06), 0.03);
+  close(matchPct(EXAMPLE.people[0].retirement, 0.06), 0.03);
   assert.equal(A.checks.find(c => c.key === "match").status, "ok");
 
   // validation: fractions only, not both forms, blank tiers dropped, round-trips
   assert.throws(() => normalize({ retirement: { match_tiers: [{ rate: 100, pct: 4 }] } }), /fractions/);
   assert.throws(() => normalize({ retirement: { employer_match_rate: 0.5, match_tiers: [{ rate: 1, pct: 0.04 }] } }), /not both/);
   const d = normalize({ retirement: { match_tiers: [{ rate: "1", pct: "0.04" }, { rate: null, pct: null }] } });
-  assert.deepEqual(d.retirement.match_tiers, [{ rate: 1, pct: 0.04 }]);
+  assert.deepEqual(d.people[0].retirement.match_tiers, [{ rate: 1, pct: 0.04 }]);
   assert.deepEqual(normalize(JSON.parse(JSON.stringify(d))), d);
 });
 
@@ -287,6 +289,46 @@ test("real estate: a HELOC on the home plus a rental, with rent as other income"
   // a rental with no rent listed is pointed out; bad loan rates are rejected
   assert.ok(analyze(normalize({ properties: [{ name: "Cabin", value: 1 }] }), TODAY).assumptions.some(a => /no rent listed/.test(a)));
   assert.throws(() => normalize({ properties: [{ name: "X", loans: [{ apr: 6.5 }] }] }), /fraction/);
+});
+
+test("household: two earners add up; taxes and match are checked per person; names stay out of the export", () => {
+  const sam = { name: "Sam", age: 32, income: { take_home_biweekly: 2000, gross_annual: 70000 },
+    retirement: { employee_contribution_pct: 0.03, match_tiers: [{ rate: 1, pct: 0.04 }] } };
+  const input = { ...EXAMPLE, people: [{ ...EXAMPLE.people[0], name: "Alex" }, sam] };
+  const d = normalize(input), H = analyze(d, TODAY);
+  const samTake = 2000 * 26 / 12, samGross = 70000 / 12, alexGross = 115000 / 12;
+  close(H.amounts.take_home_monthly, 6200 + samTake);
+  close(H.amounts.gross_monthly, alexGross + samGross);
+  close(H.amounts.employee_401k_monthly, 0.06 * alexGross + 0.03 * samGross);
+  close(H.amounts.employer_401k_monthly, 0.03 * alexGross + 0.03 * samGross);
+  close(H.amounts.taxes_monthly, (alexGross - 575 - 6200) + (samGross - 0.03 * samGross - samTake));
+  close(H.amounts.surplus_monthly, 6200 + samTake - 4350 - 485);
+  close(H.ratios.debt_to_income, 485 / (alexGross + samGross));
+  const per = k => H.checks.filter(c => c.key === k).map(c => [c.person, c.status]);
+  assert.deepEqual(per("match"), [[0, "ok"], [1, "act"]]);
+  assert.deepEqual(per("taxes"), [[0, "info"], [1, "info"]]);
+  assert.equal(H.checks.find(c => c.key === "savings_rate").person, undefined); // household checks have no person
+  close(H.ratios.people[1].share_of_household_take_home, samTake / (6200 + samTake));
+  assert.deepEqual(H.amounts.fi_base.ages, [34, 32]);
+  const md = exportMarkdown(H);
+  assert.match(md, /Employer match captured \(person 2\) \| ACT/);
+  assert.match(md, /## Household[\s\S]*- person 2: 41% of household take-home/);
+  assert.doesNotMatch(md + JSON.stringify(exportJSON(H)), /Alex|Sam/);
+  assert.match(reportText(H), /Sam: take-home\s+\$4,333/);
+  assertNoLeaks(input, H);
+  assert.deepEqual(normalize(JSON.parse(JSON.stringify(d))), d);
+  // errors name the person when there are several
+  assert.throws(() => normalize({ people: [{ name: "Alex" }, { name: "Sam", income: { gross_annual: "lots" } }] }), /^Error: Sam: income\.gross_annual/);
+});
+
+test("household: older files with top-level income, 401(k), and age become person 1", () => {
+  const old = { profile: { age: 40 }, income: { take_home_monthly: 5000 }, retirement: { employee_contribution_pct: 0.05 } };
+  const d = normalize(old);
+  assert.deepEqual(d.people, [{ name: "", age: 40, income: { take_home_monthly: 5000 }, retirement: { employee_contribution_pct: 0.05 } }]);
+  assert.equal(d.income, undefined);
+  assert.equal(d.profile, undefined);
+  assert.throws(() => normalize({ ...old, people: [] }), /not both/);
+  assert.equal(analyze(normalize({}), TODAY).amounts.people.length, 0); // nobody entered yet still analyzes
 });
 
 test("FI: income that continues can cover all spending", () => {

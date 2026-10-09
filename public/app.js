@@ -10,20 +10,27 @@ import { detectStore } from "./store.js";
 let nextId = 1;
 const LISTS = ["expenses", "debts", "accounts", "history", "properties", "other_income"];
 
+const newPerson = () => ({ name: "", income: {}, retirement: {}, _id: nextId++ });
+
 /** Shape data for editing: every section present, every list row tagged with a stable _id for x-for keys. */
 function forEditing(d) {
   const out = { ...d };
-  for (const s of ["income", "retirement", "profile", "fi"]) out[s] = { ...(d[s] ?? {}) };
+  for (const s of ["profile", "fi"]) out[s] = { ...(d[s] ?? {}) };
+  // people: always at least one; each has its own income and 401(k) (match tiers tagged for x-for keys)
+  out.people = (d.people?.length ? d.people : [newPerson()]).map(p => {
+    const r = { ...(p.retirement ?? {}) };
+    if (r.match_tiers) r.match_tiers = r.match_tiers.map(t => ({ ...t, _id: nextId++ }));
+    return { ...p, income: { ...(p.income ?? {}) }, retirement: r, _id: nextId++ };
+  });
   for (const l of LISTS) out[l] = (d[l] ?? []).map(r => ({ ...r, _id: nextId++ }));
   for (const a of out.accounts) if (a.allocation) a.allocation = { ...a.allocation };
-  if (out.retirement.match_tiers) out.retirement.match_tiers = out.retirement.match_tiers.map(t => ({ ...t, _id: nextId++ }));
   if (d.savings) out.savings = { ...d.savings };
   for (const p of out.properties) p.loans = (p.loans ?? []).map(l => ({ ...l, _id: nextId++ }));
   return out;
 }
 /** Strip editor-only keys (leading underscore) and proxies. */
 const plain = d => JSON.parse(JSON.stringify(d, (k, v) => (k.startsWith("_") ? undefined : v)));
-const blank = () => ({ income: {}, retirement: {}, profile: {}, fi: {}, expenses: [], debts: [], accounts: [], history: [], properties: [], other_income: [] });
+const blank = () => ({ people: [newPerson()], profile: {}, fi: {}, expenses: [], debts: [], accounts: [], history: [], properties: [], other_income: [] });
 const fmts = {};
 const fmtFor = code => fmts[code ?? DEFAULT_CURRENCY] ??= moneyFormat(code ?? DEFAULT_CURRENCY);
 let money = fmtFor().money; // follows data.currency; set in recompute()
@@ -188,12 +195,17 @@ Alpine.data("app", () => ({
     this._current = { A, n };
     money = fmtFor(n.currency).money;
     showCurrencySymbol(n.currency);
-    const a = A.amounts, ret = n.retirement ?? {}, fullMatch = matchPct(ret, Infinity);
+    const a = A.amounts;
+    const perPerson = {}; // "income<_id>", "retirement<_id>", "match<_id>": section summaries for each person
+    n.people.forEach((np, i) => {
+      const id = this.data.people[i]?._id, p = a.people[i], ret = np.retirement, full = matchPct(ret, Infinity), emp = ret.employee_contribution_pct ?? 0;
+      perPerson["income" + id] = money(p.take_home) + " / mo" + (p.taxes > 0 ? " · taxes " + money(p.taxes) : "");
+      perPerson["retirement" + id] = money(p.employee_401k + p.employer_401k) + " / mo";
+      perPerson["match" + id] = full ? `Full match: ${pctText(full)} of pay when contributing ${pctText(fullMatchAt(ret))}. ` +
+        `At ${pctText(emp)}, the match is ${pctText(matchPct(ret, emp))}.` : "";
+    });
     this.sums = {
-      match: fullMatch ? `Full match: ${pctText(fullMatch)} of pay when you contribute ${pctText(fullMatchAt(ret))}. ` +
-        `At your ${pctText(ret.employee_contribution_pct ?? 0)}, the match is ${pctText(matchPct(ret, ret.employee_contribution_pct ?? 0))}.` : "",
-      income: money(a.take_home_monthly) + " / mo" + (a.taxes_monthly > 0 ? " · taxes " + money(a.taxes_monthly) : ""),
-      retirement: money(a.employee_401k_monthly + a.employer_401k_monthly) + " / mo",
+      ...perPerson,
       savings: n.savings ? money(a.saved_from_pay_monthly) + " / mo" : "assumed: full surplus",
       expenses: money(a.expenses_monthly) + " / mo",
       debts: n.debts.length + " · " + money(a.debt_balance),
@@ -285,14 +297,24 @@ Alpine.data("app", () => ({
     const raw = ev.target.value.trim();
     obj[key] = raw === "" ? null : Number.isFinite(Number(raw)) ? Number(raw) / 100 : raw;
   },
+  // people: everyone has their own pay and 401(k); everything else is shared
+  multiPerson() { return this.data.people.length > 1; },
+  personLabel(person, i) { return person.name || `Person ${i + 1}`; },
+  personTitle(kind, person, i) { return this.multiPerson() ? `${kind} · ${this.personLabel(person, i)}` : kind; },
+  personSum(kind, person) { return this.sums[kind + person._id] ?? ""; },
+  canRemovePerson(i) { return i > 0; },
+  addPerson() { this.data.people.push(newPerson()); },
+  removePerson(i) {
+    if (confirm(`Remove ${this.personLabel(this.data.people[i], i)} and their pay and 401(k)?`)) this.data.people.splice(i, 1);
+  },
   // take-home pay: stored as take_home_monthly or take_home_biweekly, whichever key is present
-  isBiweekly() { return "take_home_biweekly" in this.data.income; },
-  isMonthly() { return !this.isBiweekly(); },
-  isPeriod(p) { return (p.value === "biweekly") === this.isBiweekly(); },
+  isBiweekly(person) { return "take_home_biweekly" in person.income; },
+  isMonthly(person) { return !this.isBiweekly(person); },
+  isPeriod(person, p) { return (p.value === "biweekly") === this.isBiweekly(person); },
   /** Converts take-home and other deductions on switch so results don't jump before the user types their paycheck. */
-  setPayPeriod(ev) {
-    const inc = this.data.income, toBiweekly = ev.target.value === "biweekly";
-    if (toBiweekly === this.isBiweekly()) return;
+  setPayPeriod(person, ev) {
+    const inc = person.income, toBiweekly = ev.target.value === "biweekly";
+    if (toBiweekly === this.isBiweekly(person)) return;
     const [src, dst] = toBiweekly ? ["_monthly", "_biweekly"] : ["_biweekly", "_monthly"];
     const f = toBiweekly ? 1 / BIWEEKLY_TO_MONTHLY : BIWEEKLY_TO_MONTHLY;
     for (const base of ["take_home", "other_deductions"]) {
@@ -301,10 +323,10 @@ Alpine.data("app", () => ({
       if (had || base === "take_home") inc[base + dst] = v ? Math.round(v * f * 100) / 100 : null; // take_home's key sets the period
     }
   },
-  deductionsLabel() { return "Other paycheck deductions" + (this.isBiweekly() ? " / paycheck" : " / month"); },
-  takeHomeHint() {
-    if (!this.isBiweekly()) return "Net pay deposited to your bank.";
-    const m = (Number(this.data.income.take_home_biweekly) || 0) * BIWEEKLY_TO_MONTHLY;
+  deductionsLabel(person) { return "Other paycheck deductions" + (this.isBiweekly(person) ? " / paycheck" : " / month"); },
+  takeHomeHint(person) {
+    if (!this.isBiweekly(person)) return "Net pay deposited to the bank.";
+    const m = (Number(person.income.take_home_biweekly) || 0) * BIWEEKLY_TO_MONTHLY;
     return `Net pay per paycheck. Averages ${fmtFor(this.data.currency).money(m)} / month (26 paychecks a year).`;
   },
   hasSavings() { return !!this.data.savings; },
@@ -313,10 +335,10 @@ Alpine.data("app", () => ({
     else delete this.data.savings;
   },
   // tiered employer match: replaces the single match rate + limit; switching carries the single match into tier 1 and back
-  hasTiers() { return Array.isArray(this.data.retirement.match_tiers); },
-  isSimpleMatch() { return !this.hasTiers(); },
-  toggleTiers(ev) {
-    const r = this.data.retirement;
+  hasTiers(person) { return Array.isArray(person.retirement.match_tiers); },
+  isSimpleMatch(person) { return !this.hasTiers(person); },
+  toggleTiers(person, ev) {
+    const r = person.retirement;
     if (ev.target.checked) {
       r.match_tiers = [{ rate: r.employer_match_rate || null, pct: r.employer_match_limit_pct || null, _id: nextId++ }, { rate: null, pct: null, _id: nextId++ }];
       delete r.employer_match_rate; delete r.employer_match_limit_pct;
@@ -326,8 +348,8 @@ Alpine.data("app", () => ({
       if (t) Object.assign(r, { employer_match_rate: t.rate, employer_match_limit_pct: t.pct });
     }
   },
-  addTier() { this.data.retirement.match_tiers.push({ rate: null, pct: null, _id: nextId++ }); },
-  removeTier(i) { this.data.retirement.match_tiers.splice(i, 1); },
+  addTier(person) { person.retirement.match_tiers.push({ rate: null, pct: null, _id: nextId++ }); },
+  removeTier(person, i) { person.retirement.match_tiers.splice(i, 1); },
   tierText(i) { return i === 0 ? "on the first" : "on the next"; },
   // real estate: properties, each with loans; the first one added is assumed to be where you live
   hasProperties() { return this.data.properties.length > 0; },

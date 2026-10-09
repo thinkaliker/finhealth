@@ -29,7 +29,7 @@ test("GET /api/data returns the file and marks file mode", async () => {
   assert.equal(r.headers.get("x-finhealth-mode"), "file");
   const j = await r.json();
   assert.equal(j.exists, true);
-  assert.equal(j.data.income.take_home_monthly, 6200);
+  assert.equal(j.data.people[0].income.take_home_monthly, 6200);
 });
 
 test("GET /api/export.md has no amounts header and the health table", async () => {
@@ -50,8 +50,8 @@ test("POST /api/data validates, saves, keeps .bak", async () => {
   assert.equal(bad.status, 400);
   const ok = await post("/api/data", { income: { take_home_monthly: 5000 } });
   assert.equal(ok.status, 200);
-  assert.equal(JSON.parse(await fs.readFile(file, "utf8")).income.take_home_monthly, 5000);
-  assert.equal(JSON.parse(await fs.readFile(file + ".bak", "utf8")).income.take_home_monthly, 6200);
+  assert.equal(JSON.parse(await fs.readFile(file, "utf8")).people[0].income.take_home_monthly, 5000); // saved in the current format
+  assert.equal(JSON.parse(await fs.readFile(file + ".bak", "utf8")).people[0].income.take_home_monthly, 6200);
 });
 
 test("index.html is marked as file mode when served by Node", async () => {
