@@ -23,6 +23,7 @@ Personal-finance health check. The user enters income, 401(k), expenses, debts, 
 - The CSP in `index.html` blocks third-party scripts and cross-origin requests. Keep it. Alpine's CSP build cannot evaluate inline JS expressions: template attributes may only reference properties and methods defined in `Alpine.data("app", ...)`, plus simple property access, comparisons, and assignments. No arrow functions or template literals in HTML attributes.
 - The export must contain no currency amounts. `test/finhealth.test.js` has a leak check; extend it when adding export fields.
 - Server security: binds 127.0.0.1; rejects a foreign `Host` header (DNS rebinding) and POSTs that are not JSON or carry a foreign `Origin`. Do not bind to 0.0.0.0 without adding authentication; the API has none.
+- `--allow-host name:port` adds an accepted Host/Origin for a reverse proxy. The user chose (2026-10-09) to publish on their tailnet this way with no auth, relying on tailnet ACLs.
 
 ## Conventions
 
@@ -33,6 +34,8 @@ Personal-finance health check. The user enters income, 401(k), expenses, debts, 
 ## Running on a remote VM
 
 The server only listens on 127.0.0.1. From your laptop: `ssh -L 8765:127.0.0.1:8765 <vm>` then open http://127.0.0.1:8765. The Host header then matches, so no server change is needed. See README "Running on a server".
+
+On the dev VM it's published with the `publish-to-dev-vm` skill: systemd user service `app-finhealth`, started by the untracked `.devvm-start.sh` (passes `--port $PORT --allow-host <tailnet name>:$PORT`), exposed with `tailscale serve`. Data lives in `data.json` in this directory (gitignored). After code changes: `systemctl --user restart app-finhealth`.
 
 ## Open followups
 

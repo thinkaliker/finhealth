@@ -2,6 +2,7 @@
 // finhealth CLI. Same calculation module as the web page.
 //
 //   node cli.js serve  data.json [--port 8765] [--open]   web page + API on 127.0.0.1
+//                      [--allow-host name:port ...]        also accept this Host (reverse proxy); no auth
 //   node cli.js export data.json [--json]                  amount-free summary for an LLM
 //   node cli.js report data.json                           full local report, with amounts
 //   node cli.js init   data.json                           copy the example data file
@@ -13,13 +14,18 @@ import { analyze, exportJSON, exportMarkdown, reportText, normalize } from "./pu
 import { createServer, readData } from "./server.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const USAGE = `usage: node cli.js <serve|export|report|init> <data.json> [--port N] [--open] [--json]`;
+const USAGE = `usage: node cli.js <serve|export|report|init> <data.json> [--port N] [--open] [--json] [--allow-host name:port]`;
 
 function parseArgs(argv) {
   const [cmd, file, ...rest] = argv;
-  const opts = { port: 8765, open: false, json: false };
+  const opts = { port: 8765, open: false, json: false, hosts: [] };
   for (let i = 0; i < rest.length; i++) {
     if (rest[i] === "--port") opts.port = Number(rest[++i]);
+    else if (rest[i] === "--allow-host") {
+      const h = rest[++i];
+      if (!/^[a-z0-9.-]+:\d+$/i.test(h ?? "")) throw new Error("--allow-host takes name:port, e.g. vm.tailnet.ts.net:8100");
+      opts.hosts.push(h.toLowerCase());
+    }
     else if (rest[i] === "--open") opts.open = true;
     else if (rest[i] === "--json") opts.json = true;
     else throw new Error(`unknown option ${rest[i]}\n${USAGE}`);
@@ -44,7 +50,7 @@ async function main() {
     return;
   }
   if (cmd === "serve") {
-    const server = createServer({ file, port: opts.port });
+    const server = createServer({ file, port: opts.port, hosts: opts.hosts });
     server.listen(opts.port, "127.0.0.1", () => {
       const url = `http://127.0.0.1:${opts.port}/`;
       console.log(`finhealth: ${url}  (data file: ${file})`);

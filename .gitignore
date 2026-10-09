@@ -4,3 +4,8 @@ data.json
 *.json.tmp
 finhealth-*.json
 node_modules/
+.venv/
+__pycache__/
+.env
+dist/
+.devvm-start.sh

@@ -127,6 +127,17 @@ WantedBy=default.target
 
 Then `systemctl --user enable --now finhealth`, and `loginctl enable-linger $USER` if it should run while you're logged out. Keep the data file outside the repo directory, or rely on `.gitignore`.
 
+### Behind a reverse proxy (e.g. `tailscale serve`)
+
+The server rejects any `Host` other than `127.0.0.1`/`localhost`. To put it behind a proxy that forwards the original `Host`, name that host explicitly:
+
+```sh
+node cli.js serve data.json --port 8100 --allow-host vm.tailnet.ts.net:8100
+tailscale serve --bg --https=8100 http://127.0.0.1:8100
+```
+
+There is still no login: every device that can reach the proxy can read and overwrite the data file. With `tailscale serve`, that's whatever your tailnet ACLs allow to reach this machine.
+
 ## Deploying to GitHub Pages
 
 `.github/workflows/pages.yml` runs the tests and publishes `public/` on every push to `main`. In the repo's Settings → Pages, set Source to "GitHub Actions". `.gitignore` excludes `data.json` and exported files so your numbers aren't committed by accident.

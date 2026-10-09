@@ -33,8 +33,9 @@ export async function writeData(file, data) {
   await fs.rename(tmp, file);
 }
 
-export function createServer({ file, port }) {
-  const allowedHosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`]);
+/** `hosts`: extra Host values to accept ("name:port"), e.g. a tailscale serve name. Those clients get full API access. */
+export function createServer({ file, port, hosts = [] }) {
+  const allowedHosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`, ...hosts]);
 
   const send = (res, code, body, type = "application/json; charset=utf-8", extra = {}) => {
     const buf = Buffer.isBuffer(body) ? body : Buffer.from(typeof body === "string" ? body : JSON.stringify(body));

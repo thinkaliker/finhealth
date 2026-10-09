@@ -72,3 +72,21 @@ test("rejects foreign Host, foreign Origin, non-JSON POST, path traversal", asyn
   for (const p of ["/../server.js", "/%2e%2e/server.js", "/..%2fserver.js", "/vendor/../../server.js"])
     assert.ok([403, 404].includes(await raw({ path: p })), p);
 });
+
+test("hosts option accepts a proxy Host and its https Origin, nothing else", async () => {
+  const http = await import("node:http");
+  const proxied = createServer({ file, port, hosts: ["vm.example.ts.net:8100"] });
+  await new Promise(r => proxied.listen(0, "127.0.0.1", r));
+  const p = proxied.address().port;
+  const raw = (headers, method = "GET", body) => new Promise(res => {
+    const req = http.request({ host: "127.0.0.1", port: p, path: "/api/analyze", method, headers }, r => { r.resume(); res(r.statusCode); });
+    req.end(body);
+  });
+  try {
+    assert.equal(await raw({ Host: "vm.example.ts.net:8100" }), 404); // GET /api/analyze isn't a route: past the Host check
+    const json = { Host: "vm.example.ts.net:8100", "Content-Type": "application/json" };
+    assert.equal(await raw({ ...json, Origin: "https://vm.example.ts.net:8100" }, "POST", "{}"), 200);
+    assert.equal(await raw({ ...json, Origin: "https://evil.example" }, "POST", "{}"), 403);
+    assert.equal(await raw({ Host: "vm.example.ts.net:9999" }), 403);
+  } finally { proxied.close(); }
+});
