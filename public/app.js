@@ -2,7 +2,8 @@
 // results and charts from charts.js. Template expressions only reference properties and methods
 // defined here, which is what the CSP build requires (no eval).
 import Alpine from "./vendor/alpine-csp.esm.min.js";
-import { normalize, analyze, exportMarkdown, todayISO, addMonths, BIWEEKLY_TO_MONTHLY, matchPct, fullMatchAt } from "./finhealth.js";
+import { normalize, analyze, exportMarkdown, todayISO, addMonths, BIWEEKLY_TO_MONTHLY, matchPct, fullMatchAt,
+  moneyFormat, CURRENCIES, DEFAULT_CURRENCY } from "./finhealth.js";
 import { renderResults, drawCharts, setFiHandler } from "./charts.js";
 import { detectStore } from "./store.js";
 
@@ -23,7 +24,16 @@ function forEditing(d) {
 /** Strip editor-only keys (leading underscore) and proxies. */
 const plain = d => JSON.parse(JSON.stringify(d, (k, v) => (k.startsWith("_") ? undefined : v)));
 const blank = () => ({ income: {}, retirement: {}, profile: {}, fi: {}, expenses: [], debts: [], accounts: [], history: [] });
-const money = v => (v < 0 ? "−" : "") + Math.abs(Math.round(v)).toLocaleString();
+const fmts = {};
+const fmtFor = code => fmts[code ?? DEFAULT_CURRENCY] ??= moneyFormat(code ?? DEFAULT_CURRENCY);
+let money = fmtFor().money; // follows data.currency; set in recompute()
+/** The symbol shown inside money inputs (.num.money) comes from CSS variables. */
+function showCurrencySymbol(code) {
+  const sym = fmtFor(code).symbol, root = document.documentElement.style;
+  root.setProperty("--cur", JSON.stringify(sym));
+  root.setProperty("--cur-pad", sym ? `calc(${sym.length}ch + 12px)` : "8px");
+}
+const themeStore = window.finhealthTheme; // from theme.js, loaded in <head> so the saved theme applies before first paint
 const pctText = v => +(v * 100).toFixed(2) + "%";
 
 /**
@@ -103,6 +113,9 @@ Alpine.data("app", () => ({
     { value: "roth_401k", label: "Roth 401(k)" }, { value: "hsa", label: "HSA" },
   ],
   payPeriods: [{ value: "month", label: "per month" }, { value: "biweekly", label: "every 2 weeks" }],
+  currencies: [...CURRENCIES.map(c => ({ value: c, label: fmtFor(c).symbol === c ? c : `${fmtFor(c).symbol} ${c}` })), { value: "none", label: "No symbol" }],
+  themes: [{ value: "light", label: "Light" }, { value: "dark", label: "Dark" }, { value: "auto", label: "Auto", title: "Follow the system setting" }],
+  theme: themeStore?.get() ?? "auto",
   allocKeys: [
     { key: "stocks", label: "Stocks" }, { key: "bonds", label: "Bonds" }, { key: "cash", label: "Cash" },
     { key: "single_stock", label: "1 stock" }, { key: "other", label: "Other" },
@@ -156,6 +169,8 @@ Alpine.data("app", () => ({
     this.error = "";
     A.export_md = exportMarkdown(A);
     this._current = { A, n };
+    money = fmtFor(n.currency).money;
+    showCurrencySymbol(n.currency);
     const a = A.amounts, ret = n.retirement ?? {}, fullMatch = matchPct(ret, Infinity);
     this.sums = {
       match: fullMatch ? `Full match: ${pctText(fullMatch)} of pay when you contribute ${pctText(fullMatchAt(ret))}. ` +
@@ -235,6 +250,11 @@ Alpine.data("app", () => ({
   setNote(text) { this.note = text; this._noteSnap = this.snap(); },
   modeText() { return this.mode === "file" ? this.label : this.mode === "browser" ? "Stored in this browser only" : ""; },
   isBrowser() { return this.mode === "browser"; },
+  // header preferences: currency is part of the data (saved with it); theme is per browser
+  isCurrency(c) { return c.value === (this.data.currency ?? DEFAULT_CURRENCY); },
+  setCurrency(ev) { this.data.currency = ev.target.value; },
+  isTheme(t) { return t.value === this.theme; },
+  setTheme(v) { themeStore?.set(v); this.theme = v; this.recompute(); }, // charts read colors at draw time
   selectTab(t) { this.tab = t; if (t === "results") this.$nextTick(() => drawCharts()); },
   sum(k) { return this.sums[k] ?? ""; },
 
@@ -267,7 +287,7 @@ Alpine.data("app", () => ({
   takeHomeHint() {
     if (!this.isBiweekly()) return "Net pay deposited to your bank.";
     const m = (Number(this.data.income.take_home_biweekly) || 0) * BIWEEKLY_TO_MONTHLY;
-    return `Net pay per paycheck. Averages ${money(m)} / month (26 paychecks a year).`;
+    return `Net pay per paycheck. Averages ${fmtFor(this.data.currency).money(m)} / month (26 paychecks a year).`;
   },
   hasSavings() { return !!this.data.savings; },
   toggleSavings(ev) {

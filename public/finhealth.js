@@ -11,6 +11,19 @@ export const ACCOUNT_TYPES = Object.keys(TAX_BUCKET);
 export const CASH_LIKE = ["cash", "hysa", "cd"];
 export const ALLOC_KEYS = ["stocks", "bonds", "cash", "single_stock", "other"];
 export const HIGH_INTEREST_APR = 0.08;
+// display currency (data.currency): an ISO code, or "none" for plain numbers. Amounts are whole units.
+export const DEFAULT_CURRENCY = "USD";
+export const CURRENCIES = ["USD", "EUR", "GBP", "CAD", "AUD", "NZD", "CHF", "JPY", "CNY", "INR", "SGD", "HKD", "SEK", "NOK", "DKK", "MXN", "BRL", "ZAR"];
+
+/** Money formatting for a currency: {money: "$1,234", short: "$1.2M" (axis ticks), symbol: "$"}. Negatives use a true minus. */
+export function moneyFormat(currency = DEFAULT_CURRENCY, locale) {
+  const cur = currency === "none" ? {} : { style: "currency", currency, currencyDisplay: "narrowSymbol" };
+  const full = new Intl.NumberFormat(locale, { ...cur, minimumFractionDigits: 0, maximumFractionDigits: 0 });
+  const compact = new Intl.NumberFormat(locale, { ...cur, notation: "compact", minimumFractionDigits: 0, maximumFractionDigits: 1 });
+  const signed = f => v => { const r = Math.round(v); return (r < 0 ? "−" : "") + f.format(Math.abs(r)); };
+  return { money: signed(full), short: signed(compact), symbol: full.formatToParts(0).find(p => p.type === "currency")?.value ?? "" };
+}
+
 // financial independence settings (data.fi); the 4% rule means a target of 25x annual spending
 export const FI_DEFAULTS = { withdrawal_rate: 0.04, real_return: 0.05, retirement_tax_rate: 0.10 };
 export const FI_RANGES = { withdrawal_rate: [0.025, 0.06], real_return: [0, 0.10], retire_in_years: [0, 50], retirement_tax_rate: [0, 0.40] };
@@ -87,6 +100,12 @@ export function normalize(input) {
         throw new Error(`match tier ${i + 1}: rate and pct are fractions, e.g. rate 0.5 and pct 0.04 for "50% of the next 4%"`);
       return { rate, pct };
     }).filter(t => t.pct > 0);
+  }
+  if (d.currency != null) {
+    const c = String(d.currency).trim();
+    if (c.toLowerCase() === "none") d.currency = "none";
+    else if (/^[a-z]{3}$/i.test(c)) d.currency = c.toUpperCase();
+    else throw new Error('currency: use a 3-letter code like "USD", or "none"');
   }
   if (d.fi) {
     for (const [k, [lo, hi]] of Object.entries(FI_RANGES))
@@ -451,7 +470,7 @@ export function analyze(d, today = todayISO()) {
     `Investable assets vs ${+(1 / plan.settings.withdrawal_rate).toFixed(1)}x annual spending (${pctTxt(plan.settings.withdrawal_rate)} withdrawal rate). ` +
     `Years to reach at ${pctTxt(plan.settings.real_return)} real return and current contributions: ${yearsToFi ?? "n/a"}.`);
 
-  return { amounts, ratios, checks, growth: growth(history), assumptions };
+  return { amounts, ratios, checks, growth: growth(history), assumptions, currency: d.currency ?? DEFAULT_CURRENCY };
 }
 
 function growth(pts) {
@@ -600,6 +619,7 @@ export function reportText(A) {
     if (k === "debt_balance" && a.home) rows.push(["home_value", a.home.value], ["mortgage_balance", a.home.mortgage_balance]);
   }
   const lines = ["LOCAL REPORT (contains amounts; do not share)", ""];
-  for (const [k, v] of rows) lines.push(`  ${k.padEnd(28)} ${Math.round(v).toLocaleString("en-US").padStart(14)}`);
+  const { money } = moneyFormat(A.currency ?? DEFAULT_CURRENCY, "en-US");
+  for (const [k, v] of rows) lines.push(`  ${k.padEnd(28)} ${money(v).padStart(14)}`);
   return lines.join("\n") + "\n\n" + exportMarkdown(A);
 }

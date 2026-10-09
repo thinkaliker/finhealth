@@ -69,10 +69,14 @@ details.sec > summary .sum { margin-left: auto; font-weight: 400; color: var(--t
 .num { position: relative; }
 .num input { width: 100%; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); text-align: right; }
 .num.pct input { padding-right: 22px; }
+/* currency symbol inside money inputs; --cur / --cur-pad are set from the data's currency by app.js */
+.num.money::before { content: var(--cur, "$"); position: absolute; left: 8px; top: 50%; transform: translateY(-50%); color: var(--text-3); pointer-events: none; }
+.num.money input { padding-left: var(--cur-pad, 20px); }
 .num.pct::after { content: "%"; position: absolute; right: 8px; top: 50%; transform: translateY(-50%); color: var(--text-3); pointer-events: none; }
 input:focus-visible, select:focus-visible, .btn:focus-visible, .grip:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .txt { width: 100%; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); }
 select.txt { padding: 5px 6px; }
+.txt.small { width: auto; padding: 3px 6px; font-size: 12px; }
 .row { display: grid; gap: 6px; align-items: center; margin: 6px 0; }
 .row.exp { grid-template-columns: 18px 1fr 120px 28px; }
 .row.debt { grid-template-columns: 18px 1fr 88px 72px 72px 28px; }
@@ -137,6 +141,7 @@ select.txt { padding: 5px 6px; }
 .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; }
 .seg button { border: none; background: var(--surface); padding: 4px 10px; font-size: 12px; cursor: pointer; color: var(--text-2); }
 .seg button[aria-pressed="true"] { background: var(--surface-2); color: var(--text); font-weight: 600; }
+.seg button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--text-2); margin: 6px 0 8px; }
 .legend span { display: inline-flex; align-items: center; gap: 6px; }
 .legend .k-line { width: 14px; height: 2px; border-radius: 1px; }

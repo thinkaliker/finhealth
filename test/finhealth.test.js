@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { normalize, analyze, exportJSON, exportMarkdown, payoffMonths, cdNextMaturity, addMonths, parseDate, matchPct, fullMatchAt, fiPlan } from "../public/finhealth.js";
+import { normalize, analyze, exportJSON, exportMarkdown, payoffMonths, cdNextMaturity, addMonths, parseDate, matchPct, fullMatchAt, fiPlan, moneyFormat, reportText } from "../public/finhealth.js";
 
 const EXAMPLE = JSON.parse(fs.readFileSync(new URL("../public/example.json", import.meta.url)));
 const TODAY = "2026-10-08";
@@ -186,6 +186,25 @@ test("FI plan: adjustable withdrawal rate and return; take-home after you stop w
   assert.deepEqual(normalize(JSON.parse(JSON.stringify(d))), d);
   assert.equal(C.ratios.retirement.stop_working_in_years, 12);
   assertNoLeaks(input, C);
+});
+
+test("currency: formatting, validation, default USD, CLI report", () => {
+  const usd = moneyFormat("USD", "en-US");
+  assert.equal(usd.money(1234.4), "$1,234");
+  assert.equal(usd.money(-5), "−$5");
+  assert.equal(usd.money(-0.4), "$0");
+  assert.equal(usd.short(1_250_000), "$1.3M");
+  assert.equal(usd.symbol, "$");
+  assert.equal(moneyFormat("EUR", "en-US").money(1234), "€1,234");
+  assert.equal(moneyFormat("none", "en-US").money(1234), "1,234");
+  assert.equal(moneyFormat("none", "en-US").symbol, "");
+  assert.equal(normalize({ currency: " eur " }).currency, "EUR");
+  assert.equal(normalize({ currency: "None" }).currency, "none");
+  assert.throws(() => normalize({ currency: "dollars" }), /3-letter code/);
+  assert.equal(A.currency, "USD");
+  assert.match(reportText(A), /take_home_monthly\s+\$6,200/);
+  assert.match(reportText(analyze(normalize({ ...EXAMPLE, currency: "GBP" }), TODAY)), /take_home_monthly\s+£6,200/);
+  assert.doesNotMatch(exportMarkdown(A), /\$/); // the LLM export stays amount-free
 });
 
 test("home: housing is its own cash-flow line, equity counts in net worth, housing ratios checked", () => {

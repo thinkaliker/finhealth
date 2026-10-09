@@ -1,7 +1,7 @@
 // Results view: check cards, charts (hand-built SVG/HTML), and the LLM export panel.
 // Plain DOM code; all labels go through textContent. Colors come from CSS custom properties so
 // light/dark steps are chosen in styles.css, not computed here.
-import { CASH_LIKE, todayISO, fiPlan, FI_RANGES } from "./finhealth.js";
+import { CASH_LIKE, todayISO, fiPlan, FI_RANGES, moneyFormat } from "./finhealth.js";
 
 const S = { analysis: null, data: null, growthView: "amounts", root: null };
 const NS = "http://www.w3.org/2000/svg";
@@ -26,14 +26,10 @@ function sv(tag, attrs, parent) {
   return e;
 }
 const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-const nf0 = new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 });
-const money = v => (v < 0 ? "−" : "") + nf0.format(Math.abs(Math.round(v)));
-const moneyShort = v => {
-  const a = Math.abs(v), s = v < 0 ? "−" : "";
-  if (a >= 1e6) return s + (a / 1e6).toFixed(a >= 1e7 ? 0 : 1) + "M";
-  if (a >= 1e3) return s + (a / 1e3).toFixed(a >= 1e4 ? 0 : 1) + "k";
-  return s + Math.round(a);
-};
+// set from the data's currency on every render; tooltips and tables call these lazily
+let money, moneyShort;
+const setCurrency = code => ({ money, short: moneyShort } = moneyFormat(code));
+setCurrency();
 const pct = (v, d = 0) => v == null ? "n/a" : (v * 100).toFixed(d) + "%";
 const today = () => todayISO();
 const fmtDate = s => new Date(s + "T00:00:00").toLocaleDateString(undefined, { month: "short", year: "numeric" });
@@ -212,6 +208,7 @@ function draw() {
   const a = A.amounts, r = A.ratios;
   const C = k => css(k);
   S.fiPlan = null; // any slider preview is superseded by the fresh analysis
+  setCurrency(A.currency);
   R.replaceChildren();
 
   // checks

@@ -59,6 +59,7 @@ JSON. See `public/example.json`.
 ```jsonc
 {
   "version": 1,
+  "currency":   "USD",                                           // optional; ISO code or "none"; set in the header
   "profile":    { "age": 34 },                                   // optional
   "income":     { "take_home_monthly": 6200, "gross_annual": 115000 },  // or "take_home_biweekly": 2860 per paycheck
   "retirement": { "employee_contribution_pct": 0.06, "employer_match_rate": 0.5,
