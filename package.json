@@ -1,0 +1,13 @@
+{
+  "name": "finhealth",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Local personal-finance health check with an amount-free export for LLMs",
+  "type": "module",
+  "bin": { "finhealth": "cli.js" },
+  "scripts": {
+    "start": "node cli.js serve data.json --open",
+    "test": "node --test"
+  },
+  "engines": { "node": ">=18" }
+}

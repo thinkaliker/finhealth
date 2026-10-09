@@ -1,0 +1,149 @@
+{
+  "version": 1,
+  "profile": {
+    "age": 34
+  },
+  "income": {
+    "take_home_monthly": 6200,
+    "gross_annual": 115000
+  },
+  "retirement": {
+    "employee_contribution_pct": 0.06,
+    "employer_match_rate": 0.5,
+    "employer_match_limit_pct": 0.06,
+    "employer_nonelective_pct": 0.0
+  },
+  "savings": {
+    "monthly_to_investments": 800,
+    "monthly_to_cash": 300
+  },
+  "expenses": [
+    {
+      "name": "housing",
+      "amount": 2100
+    },
+    {
+      "name": "utilities",
+      "amount": 220
+    },
+    {
+      "name": "groceries",
+      "amount": 650
+    },
+    {
+      "name": "transport",
+      "amount": 380
+    },
+    {
+      "name": "insurance",
+      "amount": 190
+    },
+    {
+      "name": "dining",
+      "amount": 350
+    },
+    {
+      "name": "subscriptions",
+      "amount": 60
+    },
+    {
+      "name": "other",
+      "amount": 400
+    }
+  ],
+  "debts": [
+    {
+      "name": "auto loan",
+      "balance": 14000,
+      "apr": 0.059,
+      "min_payment": 410
+    },
+    {
+      "name": "credit card",
+      "balance": 2300,
+      "apr": 0.2399,
+      "min_payment": 75
+    }
+  ],
+  "accounts": [
+    {
+      "name": "checking",
+      "type": "cash",
+      "balance": 4500
+    },
+    {
+      "name": "high-yield savings",
+      "type": "hysa",
+      "balance": 7000,
+      "apr": 0.041
+    },
+    {
+      "name": "CD rung 1",
+      "type": "cd",
+      "balance": 2500,
+      "apr": 0.043,
+      "maturity_date": "2026-12-15",
+      "term_months": 12,
+      "penalty_months": 3,
+      "renews": true
+    },
+    {
+      "name": "CD rung 2",
+      "type": "cd",
+      "balance": 2500,
+      "apr": 0.045,
+      "maturity_date": "2027-06-15",
+      "term_months": 12,
+      "penalty_months": 3,
+      "renews": true
+    },
+    {
+      "name": "work 401k",
+      "type": "401k",
+      "balance": 98000,
+      "allocation": {
+        "stocks": 0.9,
+        "bonds": 0.1
+      }
+    },
+    {
+      "name": "roth ira",
+      "type": "roth_ira",
+      "balance": 31000,
+      "allocation": {
+        "stocks": 1.0
+      }
+    },
+    {
+      "name": "brokerage",
+      "type": "brokerage",
+      "balance": 22000,
+      "allocation": {
+        "stocks": 0.6,
+        "single_stock": 0.4
+      }
+    }
+  ],
+  "history": [
+    {
+      "date": "2024-10-01",
+      "net_worth": 98000,
+      "investable": 105000
+    },
+    {
+      "date": "2025-04-01",
+      "net_worth": 112000,
+      "investable": 121000
+    },
+    {
+      "date": "2025-10-01",
+      "net_worth": 121000,
+      "investable": 132000
+    },
+    {
+      "date": "2026-04-01",
+      "net_worth": 138000,
+      "investable": 145000
+    }
+  ]
+}

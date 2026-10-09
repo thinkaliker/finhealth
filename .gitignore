@@ -1,0 +1,6 @@
+# your financial data: never commit
+data.json
+*.json.bak
+*.json.tmp
+finhealth-*.json
+node_modules/

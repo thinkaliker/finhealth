@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<!-- No third-party code, and the page may only talk to its own origin: data cannot be sent elsewhere. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; connect-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="no-referrer">
+<meta name="finhealth-mode" content="browser">
+<link rel="icon" href="data:,">
+<title>Finance Health Check</title>
+<link rel="stylesheet" href="styles.css">
+<script type="module" src="app.js"></script>
+</head>
+<body x-data="app">
+<header>
+  <h1>Finance health check</h1>
+  <span class="mode" :class="mode" x-text="modeText()" :title="modeText()"></span>
+  <span class="spacer"></span>
+  <span class="status" aria-live="polite" x-text="statusText()"></span>
+  <div class="toolbar" x-show="!onboarding" x-cloak>
+    <button class="btn small" type="button" @click="pickFile()">Import</button>
+    <button class="btn small" type="button" @click="exportFile()">Export</button>
+    <button class="btn small danger" type="button" x-show="isBrowser()" @click="clearBrowser()">Delete browser data</button>
+    <button class="btn" type="button" @click="revert()">Revert</button>
+    <button class="btn primary" type="button" @click="save()" :disabled="!isDirty()">Save</button>
+  </div>
+  <input class="hidden-input" type="file" accept="application/json,.json" x-ref="file" @change="importFile($event)">
+</header>
+
+<div class="error" role="alert" x-show="error" x-text="error" x-cloak></div>
+
+<!-- first run: nothing stored yet -->
+<section class="onboard" x-show="onboarding && !loading" x-cloak>
+  <h2>Get started</h2>
+  <p x-show="isBrowser()">Data entered here stays in this browser's storage. Nothing is uploaded. Use Export to keep a file copy or move to another device.</p>
+  <p x-show="!isBrowser()">Data is saved to the JSON file shown in the header.</p>
+  <div class="addrow">
+    <button class="btn primary" type="button" @click="loadExample()">Start from example data</button>
+    <button class="btn" type="button" @click="startEmpty()">Start empty</button>
+    <button class="btn" type="button" @click="pickFile()">Import a .json file</button>
+  </div>
+  <p class="fine">Browser storage can be cleared by the browser or by clearing site data. Export after significant changes.</p>
+</section>
+
+<nav class="tabs" role="tablist" x-show="!onboarding" x-cloak>
+  <button role="tab" type="button" :aria-selected="tab === 'inputs'" @click="selectTab('inputs')">Inputs</button>
+  <button role="tab" type="button" :aria-selected="tab === 'results'" @click="selectTab('results')">Results</button>
+</nav>
+
+<main class="layout" x-show="!onboarding" x-cloak>
+  <section data-pane="inputs" :class="{ active: tab === 'inputs' }" aria-label="Inputs">
+
+    <details class="sec" id="sec-income" open>
+      <summary>Income <span class="sum" x-text="sum('income')"></span></summary>
+      <div class="secbody">
+        <div class="field"><label for="f-th">Take-home pay / month</label>
+          <div class="num"><input id="f-th" type="number" step="any" min="0" inputmode="decimal" x-model.number="data.income.take_home_monthly"></div>
+          <div class="hint">Net pay deposited to your bank.</div></div>
+        <div class="field"><label for="f-gross">Gross salary / year</label>
+          <div class="num"><input id="f-gross" type="number" step="any" min="0" inputmode="decimal" x-model.number="data.income.gross_annual"></div>
+          <div class="hint">Needed for 401k amounts and debt-to-income.</div></div>
+      </div>
+    </details>
+
+    <details class="sec" id="sec-retirement" open>
+      <summary>401(k) <span class="sum" x-text="sum('retirement')"></span></summary>
+      <div class="secbody">
+        <div class="field"><label for="f-emp">Your 401k contribution</label>
+          <div class="num pct"><input id="f-emp" type="number" step="any" inputmode="decimal" :value="pctVal(data.retirement, 'employee_contribution_pct')" @input="setPct(data.retirement, 'employee_contribution_pct', $event)"></div>
+          <div class="hint">Percent of gross salary.</div></div>
+        <div class="field"><label for="f-mr">Employer match rate</label>
+          <div class="num pct"><input id="f-mr" type="number" step="any" inputmode="decimal" :value="pctVal(data.retirement, 'employer_match_rate')" @input="setPct(data.retirement, 'employer_match_rate', $event)"></div>
+          <div class="hint">50 means 50¢ per $1 you contribute.</div></div>
+        <div class="field"><label for="f-ml">Match applies up to</label>
+          <div class="num pct"><input id="f-ml" type="number" step="any" inputmode="decimal" :value="pctVal(data.retirement, 'employer_match_limit_pct')" @input="setPct(data.retirement, 'employer_match_limit_pct', $event)"></div>
+          <div class="hint">Percent of salary the match covers.</div></div>
+        <div class="field"><label for="f-ne">Fixed employer contribution</label>
+          <div class="num pct"><input id="f-ne" type="number" step="any" inputmode="decimal" :value="pctVal(data.retirement, 'employer_nonelective_pct')" @input="setPct(data.retirement, 'employer_nonelective_pct', $event)"></div>
+          <div class="hint">Paid regardless of your contribution.</div></div>
+      </div>
+    </details>
+
+    <details class="sec" id="sec-savings" open>
+      <summary>Savings from pay <span class="sum" x-text="sum('savings')"></span></summary>
+      <div class="secbody">
+        <label class="toggle"><input type="checkbox" :checked="hasSavings()" @change="toggleSavings($event)"> I know how much of my take-home I save</label>
+        <div class="note">Off: the whole monthly surplus is assumed saved.</div>
+        <template x-if="hasSavings()">
+          <div>
+            <div class="field"><label for="f-si">From pay to investments / month</label>
+              <div class="num"><input id="f-si" type="number" step="any" min="0" inputmode="decimal" x-model.number="data.savings.monthly_to_investments"></div></div>
+            <div class="field"><label for="f-sc">From pay to cash savings / month</label>
+              <div class="num"><input id="f-sc" type="number" step="any" min="0" inputmode="decimal" x-model.number="data.savings.monthly_to_cash"></div></div>
+          </div>
+        </template>
+      </div>
+    </details>
+
+    <details class="sec" id="sec-expenses" open>
+      <summary>Monthly expenses <span class="sum" x-text="sum('expenses')"></span></summary>
+      <div class="secbody">
+        <div class="colhead row exp"><span>Category</span><span>Per month</span><span></span></div>
+        <template x-for="(r, i) in data.expenses" :key="rowKey(r)">
+          <div class="row exp">
+            <input class="txt" type="text" aria-label="Category name" x-model="r.name">
+            <div class="num"><input type="number" step="any" min="0" inputmode="decimal" aria-label="Monthly amount" x-model.number="r.amount"></div>
+            <button class="btn icon" type="button" aria-label="Remove category" title="Remove" @click="remove('expenses', i)">✕</button>
+          </div>
+        </template>
+        <div class="addrow"><button class="btn small" type="button" @click="addExpense()">+ Category</button></div>
+      </div>
+    </details>
+
+    <details class="sec" id="sec-debts" open>
+      <summary>Debts <span class="sum" x-text="sum('debts')"></span></summary>
+      <div class="secbody">
+        <div class="note" x-show="!hasDebts()">No debts entered.</div>
+        <div class="colhead row debt" x-show="hasDebts()"><span>Name</span><span>Balance</span><span>APR</span><span>Min / mo</span><span></span></div>
+        <template x-for="(d, i) in data.debts" :key="rowKey(d)">
+          <div class="row debt">
+            <input class="txt" type="text" aria-label="Debt name" placeholder="e.g. car loan" x-model="d.name">
+            <div class="num"><input type="number" step="any" min="0" inputmode="decimal" aria-label="Balance" x-model.number="d.balance"></div>
+            <div class="num pct"><input type="number" step="any" inputmode="decimal" aria-label="APR" :value="pctVal(d, 'apr')" @input="setPct(d, 'apr', $event)"></div>
+            <div class="num"><input type="number" step="any" min="0" inputmode="decimal" aria-label="Minimum payment" x-model.number="d.min_payment"></div>
+            <button class="btn icon" type="button" aria-label="Remove debt" title="Remove" @click="remove('debts', i)">✕</button>
+          </div>
+        </template>
+        <div class="addrow"><button class="btn small" type="button" @click="addDebt()">+ Debt</button></div>
+      </div>
+    </details>
+
+    <details class="sec" id="sec-accounts" open>
+      <summary>Accounts <span class="sum" x-text="sum('accounts')"></span></summary>
+      <div class="secbody">
+        <template x-for="(a, i) in data.accounts" :key="rowKey(a)">
+          <div class="acct">
+            <div class="top">
+              <input class="txt" type="text" aria-label="Account name" placeholder="Account name" x-model="a.name">
+              <select class="txt" aria-label="Account type" @change="setType(a, $event)">
+                <template x-for="t in accountTypes" :key="t.value">
+                  <option :value="t.value" :selected="t.value === a.type" x-text="t.label"></option>
+                </template>
+              </select>
+              <button class="btn icon" type="button" aria-label="Remove account" title="Remove" @click="remove('accounts', i)">✕</button>
+            </div>
+            <div class="bal"><span>Balance</span>
+              <div class="num"><input type="number" step="any" min="0" inputmode="decimal" aria-label="Balance" x-model.number="a.balance"></div></div>
+            <div class="bal" x-show="hasApr(a)"><span>APR</span>
+              <div class="num pct"><input type="number" step="any" inputmode="decimal" aria-label="APR" :value="pctVal(a, 'apr')" @input="setPct(a, 'apr', $event)"></div></div>
+
+            <template x-if="isCd(a)">
+              <div>
+                <div class="cdgrid">
+                  <div><label :for="inputId('md', a)">Matures</label>
+                    <input class="txt" type="date" :id="inputId('md', a)" x-model="a.maturity_date"></div>
+                  <div><label :for="inputId('tm', a)">Term</label>
+                    <div class="num unit" data-unit="mo"><input type="number" step="1" min="0" :id="inputId('tm', a)" x-model.number="a.term_months"></div></div>
+                  <div><label :for="inputId('pm', a)">Early-exit penalty</label>
+                    <div class="num unit" data-unit="mo int."><input type="number" step="any" min="0" :id="inputId('pm', a)" x-model.number="a.penalty_months"></div></div>
+                </div>
+                <label class="toggle"><input type="checkbox" x-model="a.renews"> Renews at maturity (CD ladder)</label>
+                <div class="note" x-text="renewNote(a)"></div>
+              </div>
+            </template>
+
+            <template x-if="isInvestment(a)">
+              <div>
+                <div class="alloc">
+                  <template x-for="k in allocKeys" :key="k.key">
+                    <div><label x-text="k.label"></label>
+                      <div class="num pct"><input type="number" step="any" inputmode="decimal" :aria-label="k.label" :value="allocPct(a, k.key)" @input="setAlloc(a, k.key, $event)"></div></div>
+                  </template>
+                </div>
+                <div class="allocsum" :class="{ bad: allocBad(a) }" x-text="allocText(a)"></div>
+              </div>
+            </template>
+          </div>
+        </template>
+        <div class="addrow"><button class="btn small" type="button" @click="addAccount()">+ Account</button></div>
+      </div>
+    </details>
+
+    <details class="sec" id="sec-history" open>
+      <summary>History snapshots <span class="sum" x-text="sum('history')"></span></summary>
+      <div class="secbody">
+        <div class="note">Today's values are added to charts automatically. Record a snapshot each month or quarter to build the growth history.</div>
+        <div class="colhead row hist" x-show="hasHistory()"><span>Date</span><span>Net worth</span><span>Investable</span><span></span></div>
+        <template x-for="(h, i) in data.history" :key="rowKey(h)">
+          <div class="row hist">
+            <input class="txt" type="date" aria-label="Snapshot date" x-model="h.date">
+            <div class="num"><input type="number" step="any" inputmode="decimal" aria-label="Net worth" x-model.number="h.net_worth"></div>
+            <div class="num"><input type="number" step="any" min="0" inputmode="decimal" aria-label="Investable" x-model.number="h.investable"></div>
+            <button class="btn icon" type="button" aria-label="Remove snapshot" title="Remove" @click="remove('history', i)">✕</button>
+          </div>
+        </template>
+        <div class="addrow">
+          <button class="btn small" type="button" @click="recordToday()">Record today's snapshot</button>
+          <button class="btn small" type="button" @click="addSnapshot()">+ Past snapshot</button>
+        </div>
+      </div>
+    </details>
+
+    <details class="sec" id="sec-profile" open>
+      <summary>Profile</summary>
+      <div class="secbody">
+        <div class="field"><label for="f-age">Age</label>
+          <div class="num"><input id="f-age" type="number" step="1" min="0" inputmode="numeric" x-model.number="data.profile.age"></div>
+          <div class="hint">Optional. Enables the stock-share vs age check.</div></div>
+      </div>
+    </details>
+  </section>
+
+  <section data-pane="results" class="results" :class="{ active: tab === 'results' }" aria-label="Results" x-ref="results"></section>
+</main>
+</body>
+</html>

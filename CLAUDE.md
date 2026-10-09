@@ -1,0 +1,42 @@
+# finhealth: notes for Claude Code
+
+Personal-finance health check. The user enters income, 401(k), expenses, debts, and accounts; the app computes checks and charts locally and produces an amount-free export (ratios, durations, growth indexes) to paste into an LLM. The user's real numbers must never leave their machine.
+
+## Layout
+
+- `public/finhealth.js`: all calculations (normalize, analyze, exportMarkdown/exportJSON, CD date logic). Pure functions, no DOM or Node APIs; shared by browser and Node. Change calculations here only.
+- `public/app.js`: Alpine (CSP build) page controller: form state, save/revert/import/export, onboarding.
+- `public/charts.js`: results view; hand-written SVG/HTML charts, tooltips, data tables. Labels go through `textContent`.
+- `public/store.js`: storage switch. `file` mode when served by the Node server, `browser` (localStorage) otherwise.
+- `public/index.html`, `public/styles.css`: markup and styles. Colors are CSS custom properties with separate light/dark steps.
+- `public/vendor/alpine-csp.esm.min.js`: vendored Alpine 3.17.4 CSP build.
+- `server.js`: static server for `public/` plus the JSON API, backed by one data file. Writes atomically with `.bak`.
+- `cli.js`: `serve | export | report | init`.
+- `test/`: `node:test` suites for calculations and the API. Run `npm test`.
+- `.github/workflows/pages.yml`: runs tests, publishes `public/` to GitHub Pages.
+
+## Constraints (decided with the user)
+
+- Plain JavaScript only; no React or other large frameworks, no build step. Alpine where it helps. No npm runtime dependencies.
+- Data file is JSON (`public/example.json` shows the schema). Rates are fractions (0.045 = 4.5%).
+- The page must stay usable as a static site (GitHub Pages) and under the Node server, from the same code.
+- The CSP in `index.html` blocks third-party scripts and cross-origin requests. Keep it. Alpine's CSP build cannot evaluate inline JS expressions: template attributes may only reference properties and methods defined in `Alpine.data("app", ...)`, plus simple property access, comparisons, and assignments. No arrow functions or template literals in HTML attributes.
+- The export must contain no currency amounts. `test/finhealth.test.js` has a leak check; extend it when adding export fields.
+- Server security: binds 127.0.0.1; rejects a foreign `Host` header (DNS rebinding) and POSTs that are not JSON or carry a foreign `Origin`. Do not bind to 0.0.0.0 without adding authentication; the API has none.
+
+## Conventions
+
+- Color follows the entity (fixed slot per category), never rank. Status colors (good/warning/critical) are reserved for check states and always paired with an icon and label.
+- Every chart has a hover/focus tooltip and a "Data table" fallback.
+- Check details are amount-free strings because they go into the export.
+
+## Running on a remote VM
+
+The server only listens on 127.0.0.1. From your laptop: `ssh -L 8765:127.0.0.1:8765 <vm>` then open http://127.0.0.1:8765. The Host header then matches, so no server change is needed. See README "Running on a server".
+
+## Open followups
+
+- Optional passphrase encryption for the localStorage copy.
+- Contributions per history snapshot, to separate saving from market return in growth.
+- Money market funds / T-bills as cash-like account types.
+- Coarser export option (bands instead of two-decimal ratios).
