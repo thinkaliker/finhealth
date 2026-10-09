@@ -67,11 +67,15 @@ JSON. See `public/example.json`.
   // tiered match instead of rate + limit: 100% of the first 4%, then 50% of the next 4%
   // "retirement": { ..., "match_tiers": [{ "rate": 1, "pct": 0.04 }, { "rate": 0.5, "pct": 0.04 }] },
   "savings":    { "monthly_to_investments": 800, "monthly_to_cash": 300 },  // optional
-  "home":       { "value": 420000, "mortgage_balance": 310000, "mortgage_apr": 0.0625,  // optional
-                  "mortgage_payment": 1910, "costs_monthly": 520 },
+  "other_income": [{ "name": "Rent", "amount": 2200, "continues": true }],  // optional; monthly
+  "properties": [                                                // optional; "residence": you live there
+    { "name": "Home", "residence": true, "value": 420000, "costs_monthly": 520,
+      "loans": [{ "name": "Mortgage", "balance": 310000, "apr": 0.0625, "payment": 1910 },
+                { "name": "HELOC", "balance": 30000, "apr": 0.085, "payment": 400 }] }
+  ],
   "fi":         { "withdrawal_rate": 0.04, "real_return": 0.05, "retire_in_years": 20,  // optional; set by the sliders
                   "retirement_tax_rate": 0.10 },
-  "expenses":   [{ "name": "housing", "amount": 2100 }],
+  "expenses":   [{ "name": "groceries", "amount": 650 }],
   "debts":      [{ "name": "credit card", "balance": 2300, "apr": 0.2399, "min_payment": 75 }],
   "accounts":   [
     { "name": "checking", "type": "cash", "balance": 4500 },
@@ -86,7 +90,9 @@ JSON. See `public/example.json`.
 
 Rates and percentages are fractions (`0.045` = 4.5%); the web form shows them as percents. Take-home pay is either `take_home_monthly` or `take_home_biweekly` (one paycheck), not both; biweekly is averaged to monthly as × 26 ÷ 12, so months with a third paycheck are spread across the year. Optional `other_deductions_monthly` / `other_deductions_biweekly` (health premiums, HSA/FSA, anything withheld besides taxes and 401k) works the same way. Taxes withheld are estimated as gross − your 401k − other deductions − take-home, so `gross_annual` should be before deductions and should include a bonus only if take-home does. Account types: `cash`, `hysa`, `cd`, `brokerage`, `401k`, `403b`, `traditional_ira`, `roth_ira`, `roth_401k`, `hsa`. Investment accounts take an `allocation` (`stocks`, `bonds`, `cash`, `single_stock`, `other`) summing to 1.
 
-Home (optional): `mortgage_payment` is principal and interest only; `costs_monthly` is property tax, insurance, PMI, and HOA. Leave the mortgage and those costs out of `expenses` and `debts`. With a home, net worth includes equity (value − mortgage balance), and housing (payment + costs) is its own monthly outflow in cash flow, the emergency fund, and the FI target. Investable assets and FI progress exclude the home. Without it, rent goes under `expenses`.
+Other income (optional): money besides your paycheck, per month, as received (rent, side work, a pension). It adds to monthly income for cash flow and the savings rate, and to gross income for the debt-to-income checks. `continues: true` means it keeps paying after you stop working: it lowers the FI target and adds to take-home after you stop.
+
+Real estate (`properties`, optional): each property has a `value`, `costs_monthly` (property tax, insurance, PMI, HOA), and `loans` whose `payment` is principal and interest only. Leave these out of `expenses` and `debts`. Net worth includes the equity in every property; loan payments plus costs for all properties are one monthly outflow ("housing") in cash flow, the emergency fund, and the FI target. The 28% housing check uses only properties marked `residence`; the 36%/43% check includes every property. Investable assets and FI progress exclude real estate. Rent you collect goes under `other_income`; rent you pay goes under `expenses`. Files with the older single `home` section load as one residence and are saved in the new form.
 
 Financial independence (`fi`, set with the sliders on the results page; all optional): the target is annual spending ÷ `withdrawal_rate` (4% = 25×). Investable assets grow at `real_return` (after inflation, so everything is in today's dollars) plus invested contributions until `retire_in_years`, when job income stops; from then on, `withdrawal_rate` of that balance is withdrawn each year. Without `retire_in_years`, you stop working when the target is reached (else at 65 if age is set, else in 30 years). Take-home after you stop working taxes only withdrawals from tax-deferred accounts, at `retirement_tax_rate`, using today's account mix; Roth and HSA are tax-free, and brokerage gains tax, Social Security, and pensions aren't modeled.
 
@@ -96,15 +102,15 @@ CDs: `renews: true` models a ladder rung. Once `maturity_date` passes, the next 
 
 | Check | Formula | Thresholds |
 |---|---|---|
-| Cash flow | (take-home − expenses − housing − debt minimums) / take-home | negative = act |
-| Savings rate | (saved from pay + employee 401k + employer 401k) / (take-home + employee 401k + employer 401k) | <10% act, 10–20% watch |
+| Cash flow | (income − expenses − housing − debt minimums) / income; income = take-home + other income | negative = act |
+| Savings rate | (saved from pay + employee 401k + employer 401k) / (income + employee 401k + employer 401k) | <10% act, 10–20% watch |
 | Emergency fund | (checking + HYSA + CDs at accessible value) / (expenses + housing + debt minimums) | <3 mo act, 3–6 watch |
 | Taxes withheld | (gross − employee 401k − other deductions − take-home) / gross | info; negative = watch (inputs don't add up) |
 | Match captured | match at your deferral / maximum match (single rate + limit, or tiers) | <100% act |
-| Debt-to-income | debt minimums (excluding housing) / gross monthly | >36% act, 15–36% watch |
-| Housing cost (home only) | (mortgage payment + property costs) / gross monthly | >36% act, 28–36% watch |
-| Debt-to-income incl. housing (home only) | (housing + debt minimums) / gross monthly | >43% act, 36–43% watch |
-| Home equity (home only) | (value − mortgage balance) / value; payoff time at current payment | <20% watch |
+| Debt-to-income | debt minimums (excluding housing) / gross monthly income (salary + other income) | >36% act, 15–36% watch |
+| Housing cost (with a residence) | (loan payments + property costs where you live) / gross monthly income | >36% act, 28–36% watch |
+| Debt-to-income incl. housing (with property) | (payments + costs for every property + debt minimums) / gross monthly income | >43% act, 36–43% watch |
+| Home equity (with a residence) | (value − loan balances) / value where you live; time until the last loan is paid off | <20% watch |
 | High-interest debt | balances at APR ≥ 8% / annual gross | any = act |
 | Concentration | single_stock / investable | >20% act, 10–20% watch |
 | Allocation vs age | stock share vs (110 − age) | >15 pt gap = watch |

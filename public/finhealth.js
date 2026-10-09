@@ -123,7 +123,15 @@ export function normalize(input) {
   // retirement.match_tiers (optional): [{rate, pct}] = "rate match on the next pct of pay"; replaces the single rate + limit
   const tiers = d.retirement?.match_tiers;
   if (d.retirement) delete d.retirement.match_tiers;
-  for (const sec of ["income", "retirement", "savings", "profile", "home", "fi"]) {
+  // the older single "home" section becomes one residence in "properties"
+  if (d.home) {
+    if (d.properties) throw new Error('give "properties" or the older "home" section, not both');
+    const h = d.home, hasLoan = h.mortgage_balance || h.mortgage_payment || h.mortgage_apr;
+    d.properties = [{ name: "Home", residence: true, value: h.value, costs_monthly: h.costs_monthly,
+      loans: hasLoan ? [{ name: "Mortgage", balance: h.mortgage_balance, apr: h.mortgage_apr, payment: h.mortgage_payment }] : [] }];
+    delete d.home;
+  }
+  for (const sec of ["income", "retirement", "savings", "profile", "fi"]) {
     if (d[sec] == null) continue;
     for (const k of Object.keys(d[sec])) d[sec][k] = num(d[sec][k], `${sec}.${k}`);
   }
@@ -152,8 +160,6 @@ export function normalize(input) {
     if ("retire_in_years" in d.fi) d.fi.retire_in_years = Math.round(d.fi.retire_in_years);
     if (!Object.keys(d.fi).length) delete d.fi;
   }
-  if (d.home && !((d.home.mortgage_apr ?? 0) >= 0 && (d.home.mortgage_apr ?? 0) < 1))
-    throw new Error("home: mortgage_apr should be a fraction, e.g. 0.065 for 6.5%");
   if (d.profile && d.profile.age === 0) delete d.profile.age;
   // take-home and other deductions are per month or per biweekly paycheck; the key that is present says which
   for (const base of ["take_home", "other_deductions"]) {
@@ -169,6 +175,23 @@ export function normalize(input) {
   d.expenses = rows
     .map((r, i) => ({ name: String(r.name ?? "").trim(), amount: num(r.amount, `expense ${r.name || i + 1}`) }))
     .filter(r => r.name);
+
+  // other income (rent, side work, a pension): monthly amounts received; `continues` = keeps paying after you stop working
+  d.other_income = (d.other_income ?? [])
+    .map((r, i) => ({ name: String(r.name ?? "").trim(), amount: num(r.amount, `other income ${r.name || i + 1}`), continues: Boolean(r.continues) }))
+    .filter(r => r.name);
+
+  // real estate: each property has a value, monthly costs (tax, insurance, HOA), and loans; `residence` = you live there
+  d.properties = (d.properties ?? []).map((p, i) => {
+    const w = `property ${p.name || i + 1}`;
+    const loans = (p.loans ?? []).map((l, j) => {
+      const lw = `${w}, loan ${l.name || j + 1}`, apr = num(l.apr, lw + " apr");
+      if (!(apr >= 0 && apr < 1)) throw new Error(`${lw}: apr should be a fraction, e.g. 0.065 for 6.5%`);
+      return { name: String(l.name ?? ""), balance: num(l.balance, lw + " balance"), apr, payment: num(l.payment, lw + " payment") };
+    });
+    return { name: String(p.name ?? ""), residence: Boolean(p.residence), value: num(p.value, w + " value"),
+      costs_monthly: num(p.costs_monthly, w + " costs_monthly"), loans };
+  });
 
   d.debts = (d.debts ?? []).map((x, i) => {
     const w = `debt ${x.name || i + 1}`;
@@ -243,14 +266,16 @@ const perMonth = (inc, base) => `${base}_biweekly` in inc ? inc[`${base}_biweekl
  * Financial-independence plan in today's dollars (the return is after inflation). Contributions continue until
  * retire_in_years ("stop working": no more job income), then the same real amount, withdrawal_rate of the balance at
  * that point, is withdrawn at the start of every year. Target = annual spending / withdrawal_rate.
- * base: {investable, annual_contrib, annual_spend, tax_deferred_share, age}; settings: data.fi (any subset).
+ * base: {investable, annual_contrib, annual_spend, tax_deferred_share, age, continuing_income_annual}; settings: data.fi (any subset).
+ * Income that continues after you stop working (rent, a pension) lowers the target and adds to take-home.
  * Only tax-deferred withdrawals are taxed, at retirement_tax_rate; Roth/HSA are tax-free, brokerage gains are not modeled.
  */
 export function fiPlan(base, settings = {}) {
   const s = { ...FI_DEFAULTS, ...settings }, wr = s.withdrawal_rate, r = s.real_return;
-  const target = base.annual_spend / wr;
+  const continuing = base.continuing_income_annual ?? 0; // other income that keeps paying, e.g. rent
+  const target = Math.max(0, base.annual_spend - continuing) / wr;
   let yearsToFi = null;
-  if (target && base.investable >= target) yearsToFi = 0;
+  if (base.annual_spend > 0 && base.investable >= target) yearsToFi = 0;
   else if (target && base.annual_contrib > 0) {
     let bal = base.investable, y = 0;
     while (bal < target && y < 80) { bal = bal * (1 + r) + base.annual_contrib; y++; }
@@ -269,10 +294,12 @@ export function fiPlan(base, settings = {}) {
     else { lasts ??= y - retireIn; bal = 0; } // can't fund a full year's withdrawal
   }
   const monthly = start * wr / 12, afterTax = monthly * (1 - base.tax_deferred_share * s.retirement_tax_rate);
+  const takeHome = afterTax + continuing / 12;
   return {
     input: settings, settings: { ...s, retire_in_years: retireIn }, target, years_to_fi: yearsToFi, projection,
-    at_retirement: { balance: start, monthly_before_tax: monthly, monthly_after_tax: afterTax,
-      share_of_spending: base.annual_spend ? afterTax * 12 / base.annual_spend : null, lasts_years: lasts }, // lasts null = 30+ years
+    at_retirement: { balance: start, monthly_before_tax: monthly, monthly_after_tax: afterTax, other_income_monthly: continuing / 12,
+      monthly_take_home: takeHome, share_of_spending: base.annual_spend ? takeHome * 12 / base.annual_spend : null,
+      lasts_years: lasts }, // lasts null = 30+ years
   };
 }
 
@@ -310,17 +337,31 @@ export function analyze(d, today = todayISO()) {
   const otherDed = perMonth(inc, "other_deductions");
   const taxes = grossM > 0 && takeHome > 0 ? grossM - employee401k - otherDed - takeHome : null;
 
-  // home (optional): equity counts toward net worth; mortgage payment plus property costs are their own cash-flow line
-  const home = d.home ?? null;
-  const housing = home ? (home.mortgage_payment ?? 0) + (home.costs_monthly ?? 0) : 0;
-  const homeValue = home?.value ?? 0, mortBal = home?.mortgage_balance ?? 0, homeEquity = homeValue - mortBal;
-  if (home) {
-    assumptions.push("Net worth includes home equity at the entered home value; investable assets and FI progress exclude the home.");
+  // other income (rent, side work, a pension) adds to monthly income and, for ratios, to gross income
+  const otherIncome = sum((d.other_income ?? []).map(o => o.amount));
+  const continuingIncome = sum((d.other_income ?? []).filter(o => o.continues).map(o => o.amount));
+  const income = takeHome + otherIncome, grossIncomeM = grossM + otherIncome;
+
+  // real estate: equity counts toward net worth; loan payments plus property costs are their own outflow ("housing").
+  // Only the residence (where you live) counts for the front-end housing ratio.
+  const props = (d.properties ?? []).map(p => {
+    const loanBal = sum(p.loans.map(l => l.balance)), payments = sum(p.loans.map(l => l.payment));
+    return { name: p.name || "property", residence: p.residence, value: p.value, loan_balance: loanBal, equity: p.value - loanBal,
+      payments, costs: p.costs_monthly, outflow: payments + p.costs_monthly,
+      loans: p.loans.map(l => ({ name: l.name || "loan", balance: l.balance, apr: l.apr, payment: l.payment,
+        months_to_payoff: payoffMonths(l.balance, l.apr, l.payment) })) };
+  });
+  const residences = props.filter(p => p.residence);
+  const housing = sum(props.map(p => p.outflow)), residenceHousing = sum(residences.map(p => p.outflow));
+  const propEquity = sum(props.map(p => p.equity));
+  if (props.length) {
+    assumptions.push("Net worth includes property equity at the entered values; investable assets and FI progress exclude real estate.");
     const dup = [...debts.map(x => x.name), ...Object.keys(expenses)].filter(n => /mortgage|property tax|\bhoa\b|homeowner/i.test(n));
-    if (dup.length) assumptions.push(`The home section is filled in and ${dup.join(", ")} is also listed under debts or expenses; it may be counted twice.`);
+    if (dup.length) assumptions.push(`Real estate is filled in and ${dup.join(", ")} is also listed under debts or expenses; it may be counted twice.`);
+    if (props.some(p => !p.residence) && !otherIncome) assumptions.push("A property you don't live in has no rent listed under other income.");
   }
 
-  const surplus = takeHome - expTotal - debtPay - housing;
+  const surplus = income - expTotal - debtPay - housing;
   const sv = d.savings;
   let savedFromPay;
   if (sv) {
@@ -341,7 +382,7 @@ export function analyze(d, today = todayISO()) {
   const assets = sum(Object.values(buckets));
   const cash = buckets.cash; // balance-sheet cash, CDs at full value
   const investable = assets - cash;
-  const netWorth = assets - debtBal + homeEquity;
+  const netWorth = assets - debtBal + propEquity;
 
   // emergency money: liquid cash plus CDs at their early-withdrawal value
   const liquid = sum(accounts.filter(a => a.type === "cash" || a.type === "hysa").map(a => a.balance));
@@ -364,25 +405,26 @@ export function analyze(d, today = todayISO()) {
   const cashZeroRateShare = cash ? sum(cashAccts.filter(a => !a.apr).map(a => a.balance)) / cash : null;
   const cashByType = Object.fromEntries(CASH_LIKE.map(t => [t, sum(accounts.filter(a => a.type === t).map(a => a.balance))]));
 
-  // savings rate: everything saved / everything earned-and-kept (take-home + pre-tax + employer)
-  const savingsRate = ratio(savedFromPay + employee401k + employer401k, takeHome + employee401k + employer401k);
+  // savings rate: everything saved / everything earned-and-kept (take-home + other income + pre-tax + employer)
+  const savingsRate = ratio(savedFromPay + employee401k + employer401k, income + employee401k + employer401k);
   const burn = expTotal + debtPay + housing;
   const efMonths = burn ? emergencyCash / burn : null;
   const liquidMonths = burn ? liquid / burn : null;
-  const dti = ratio(debtPay, grossM);
+  const dti = ratio(debtPay, grossIncomeM);
   const fullMatch = matchPct(ret, Infinity), fullAt = fullMatchAt(ret);
   const matchCaptured = fullMatch ? matchPct(ret, empPct) / fullMatch : null;
   const hiDebts = debts.filter(x => x.apr >= HIGH_INTEREST_APR);
-  const hiDebtRatio = ratio(sum(hiDebts.map(x => x.balance)), grossM * 12);
+  const hiDebtRatio = ratio(sum(hiDebts.map(x => x.balance)), grossIncomeM * 12);
   const stockPct = ratio((alloc.stocks ?? 0) + (alloc.single_stock ?? 0), investable);
   const singlePct = ratio(alloc.single_stock ?? 0, investable);
 
   // financial independence: invested contributions (not cash savings) until you stop working, then withdrawals
   const annualContrib = (savedFromPay - (sv ? sv.monthly_to_cash ?? 0 : 0) + employee401k + employer401k) * 12;
-  const fiBase = { investable, annual_contrib: annualContrib, annual_spend: burn * 12,
+  const fiBase = { investable, annual_contrib: annualContrib, annual_spend: burn * 12, continuing_income_annual: continuingIncome * 12,
     tax_deferred_share: investable > 0 ? buckets.tax_deferred / investable : 0, age: d.profile?.age ?? null };
   const plan = fiPlan(fiBase, d.fi);
-  const yearsToFi = plan.years_to_fi, fiProgress = ratio(investable, plan.target);
+  // target 0 with spending > 0: income that continues already covers it
+  const yearsToFi = plan.years_to_fi, fiProgress = plan.target ? investable / plan.target : burn > 0 ? 1 : null;
 
   const history = (d.history ?? []).filter(h => h.date < today).sort((p, q) => p.date.localeCompare(q.date))
     .map(h => ({ date: h.date, net_worth: h.net_worth, investable: h.investable }));
@@ -390,22 +432,25 @@ export function analyze(d, today = todayISO()) {
 
   const amounts = {
     take_home_monthly: takeHome, gross_monthly: grossM, taxes_monthly: taxes, other_deductions_monthly: otherDed,
+    other_income_monthly: otherIncome, continuing_income_monthly: continuingIncome, income_monthly: income,
     expenses_monthly: expTotal, debt_payments_monthly: debtPay,
     debt_balance: debtBal, employee_401k_monthly: employee401k, employer_401k_monthly: employer401k,
     saved_from_pay_monthly: savedFromPay, surplus_monthly: surplus, cash, investable, assets, net_worth: netWorth,
     expenses, buckets, allocation: alloc, liquid_cash: liquid, cd_accessible: cdAccess, emergency_cash: emergencyCash,
     cds, cash_by_type: cashByType, projection: plan.projection, annual_investment_contributions: annualContrib, history,
     spending_monthly: burn, fi_base: fiBase, fi_plan: plan,
-    home: home ? { value: homeValue, mortgage_balance: mortBal, equity: homeEquity, mortgage_payment: home.mortgage_payment ?? 0,
-      costs: home.costs_monthly ?? 0, housing } : null,
+    real_estate: props.length ? { value: sum(props.map(p => p.value)), loan_balance: sum(props.map(p => p.loan_balance)), equity: propEquity,
+      housing, residence_housing: residenceHousing, properties: props } : null,
   };
 
   const ratios = {
     savings_rate: savingsRate,
     taxes_share_of_gross: taxes === null ? null : taxes / grossM,
-    expenses_share_of_take_home: ratio(expTotal, takeHome),
-    debt_payments_share_of_take_home: ratio(debtPay, takeHome),
-    surplus_share_of_take_home: ratio(surplus, takeHome),
+    expenses_share_of_income: ratio(expTotal, income),
+    debt_payments_share_of_income: ratio(debtPay, income),
+    surplus_share_of_income: ratio(surplus, income),
+    other_income_share_of_income: ratio(otherIncome, income),
+    continuing_income_share_of_spending: ratio(continuingIncome, burn),
     employer_contribution_share_of_gross: ratio(employer401k, grossM),
     emergency_fund_months: efMonths,
     liquid_cash_months: liquidMonths,
@@ -415,8 +460,8 @@ export function analyze(d, today = todayISO()) {
     cds: cds.map(c => ({ name: c.name, apr: c.apr, term_months: c.term_months, renews: c.renews,
       days_to_maturity: c.days_to_maturity, lapsed: c.lapsed, share_of_cash: ratio(c.balance, cash) })),
     debt_to_income: dti,
-    debt_balance_to_annual_gross: ratio(debtBal, grossM * 12),
-    net_worth_to_annual_gross: ratio(netWorth, grossM * 12),
+    debt_balance_to_annual_gross: ratio(debtBal, grossIncomeM * 12),
+    net_worth_to_annual_gross: ratio(netWorth, grossIncomeM * 12),
     investable_to_annual_spend: ratio(investable, burn * 12),
     fi_progress: fiProgress,
     years_to_fi: yearsToFi,
@@ -424,7 +469,7 @@ export function analyze(d, today = todayISO()) {
       withdrawal_rate: plan.settings.withdrawal_rate, target_multiple_of_annual_spending: 1 / plan.settings.withdrawal_rate,
       real_return: plan.settings.real_return, retirement_tax_rate: plan.settings.retirement_tax_rate,
       stop_working_in_years: plan.settings.retire_in_years, tax_deferred_share_of_investable: fiBase.tax_deferred_share,
-      after_tax_withdrawal_share_of_current_spending: plan.at_retirement.share_of_spending,
+      take_home_after_stopping_share_of_current_spending: plan.at_retirement.share_of_spending, // withdrawals after tax + continuing income
       money_lasts_years: plan.at_retirement.lasts_years, // null = 30+ years
     },
     stock_share: stockPct,
@@ -434,24 +479,25 @@ export function analyze(d, today = todayISO()) {
     allocation_mix: investable ? Object.fromEntries(Object.entries(alloc).filter(([k]) => k !== "cash").map(([k, v]) => [k, v / investable])) : {},
     debts: debts.map(x => ({ name: x.name || "debt", apr: x.apr, share_of_total_debt: ratio(x.balance, debtBal),
       months_to_payoff_at_minimum: payoffMonths(x.balance, x.apr, x.min_payment) })),
-    home: home ? {
-      housing_to_gross: ratio(housing, grossM),                    // front-end ratio
-      total_debt_payments_to_gross: ratio(housing + debtPay, grossM), // back-end ratio
-      housing_share_of_take_home: ratio(housing, takeHome),
-      loan_to_value: ratio(mortBal, homeValue),
-      equity_share_of_net_worth: netWorth > 0 ? homeEquity / netWorth : null,
-      mortgage_months_to_payoff: payoffMonths(mortBal, home.mortgage_apr ?? 0, home.mortgage_payment ?? 0), // 0 = no mortgage, null = never
+    real_estate: props.length ? {
+      housing_to_gross: residences.length ? ratio(residenceHousing, grossIncomeM) : null, // front-end ratio: where you live
+      total_debt_payments_to_gross: ratio(housing + debtPay, grossIncomeM),             // back-end ratio: every loan
+      housing_share_of_income: ratio(housing, income),
+      equity_share_of_net_worth: netWorth > 0 ? propEquity / netWorth : null,
+      properties: props.map(p => ({ name: p.name, residence: p.residence, loan_to_value: ratio(p.loan_balance, p.value),
+        loans: p.loans.map(l => ({ name: l.name, apr: l.apr, months_to_payoff: l.months_to_payoff })) })), // 0 = paid off, null = never
     } : null,
   };
 
   // ---- checks (amount-free details)
   const checks = [];
   const C = (key, label, status, value, unit, detail) => checks.push({ key, label, status, value, unit, detail });
-  const outflows = home ? "expenses, housing, and minimum debt payments" : "expenses and minimum debt payments";
-  if (surplus < 0) C("cash_flow", "Monthly cash flow", "act", ratio(surplus, takeHome), "%", `Monthly ${outflows} exceed take-home pay.`);
-  else C("cash_flow", "Monthly cash flow", "ok", ratio(surplus, takeHome), "%", `Take-home covers ${outflows}.`);
+  const outflows = props.length ? "expenses, housing, and minimum debt payments" : "expenses and minimum debt payments";
+  const incomeWord = otherIncome ? "take-home plus other income" : "take-home pay";
+  if (surplus < 0) C("cash_flow", "Monthly cash flow", "act", ratio(surplus, income), "%", `Monthly ${outflows} exceed ${incomeWord}.`);
+  else C("cash_flow", "Monthly cash flow", "ok", ratio(surplus, income), "%", `${incomeWord[0].toUpperCase() + incomeWord.slice(1)} covers ${outflows}.`);
   if (savingsRate !== null) C("savings_rate", "Savings rate", savingsRate >= 0.2 ? "ok" : savingsRate >= 0.1 ? "watch" : "act", savingsRate, "%",
-    "Includes 401k employee+employer and savings from take-home. Benchmarks: <10% low, 10-20% moderate, 20%+ strong.");
+    `Includes 401k employee+employer and savings from ${incomeWord}. Benchmarks: <10% low, 10-20% moderate, 20%+ strong.`);
   if (taxes !== null) {
     const t = taxes / grossM;
     if (t < 0) C("taxes", "Taxes withheld (share of gross)", "watch", t, "%",
@@ -466,19 +512,22 @@ export function analyze(d, today = todayISO()) {
   if (matchCaptured !== null) C("match", "Employer match captured", matchCaptured >= 0.999 ? "ok" : "act", matchCaptured, "%",
     `Share of available employer match you are contributing enough to receive. Contributing ${+(fullAt * 100).toFixed(2)}% of salary gets the full match` +
     (ret.match_tiers ? ` (tiered: ${ret.match_tiers.map((t, i) => `${+(t.rate * 100).toFixed(2)}% of the ${i ? "next" : "first"} ${+(t.pct * 100).toFixed(2)}%`).join(", then ")}).` : "."));
-  if (dti !== null) C("dti", home ? "Debt-to-income, excluding housing" : "Debt-to-income (payments / gross)", dti < 0.15 ? "ok" : dti <= 0.36 ? "watch" : "act", dti, "%",
+  const grossWord = otherIncome ? "gross income (salary plus other income)" : "gross income";
+  if (dti !== null) C("dti", props.length ? "Debt-to-income, excluding housing" : "Debt-to-income (payments / gross)", dti < 0.15 ? "ok" : dti <= 0.36 ? "watch" : "act", dti, "%",
     "Under 15% comfortable; lenders commonly cap around 36%.");
-  if (home) {
-    const H = ratios.home, front = H.housing_to_gross, back = H.total_debt_payments_to_gross, m = H.mortgage_months_to_payoff;
+  if (props.length) {
+    const H = ratios.real_estate, front = H.housing_to_gross, back = H.total_debt_payments_to_gross;
     if (front !== null) C("housing", "Housing cost (front-end ratio)", front <= 0.28 ? "ok" : front <= 0.36 ? "watch" : "act", front, "%",
-      "Mortgage payment plus property tax, insurance, and HOA, over gross income. Common guideline: 28% or less.");
+      `Loan payments plus property tax, insurance, and HOA for where you live, over ${grossWord}. Common guideline: 28% or less.`);
     if (back !== null) C("dti_total", "Debt-to-income, including housing (back-end)", back <= 0.36 ? "ok" : back <= 0.43 ? "watch" : "act", back, "%",
-      "Housing plus all other debt payments, over gross income. Lenders look for 36% or less; 43% is a common ceiling.");
-    if (homeValue > 0) {
-      const eq = 1 - H.loan_to_value;
-      C("home_equity", "Home equity", eq >= 0.2 ? "ok" : "watch", eq, "%", mortBal <= 0 ? "No mortgage; the home is owned outright."
-        : "Share of the home's estimated value you own. Below 20%, conventional loans usually carry PMI. " +
-          (m === null ? "At the current payment the mortgage never pays off." : `At the current payment the mortgage is paid off in ${(m / 12).toFixed(1)} years.`));
+      `Payments and costs for every property plus all other debt payments, over ${grossWord}. Lenders look for 36% or less; 43% is a common ceiling.`);
+    const resValue = sum(residences.map(p => p.value)), resLoans = residences.flatMap(p => p.loans).filter(l => l.balance > 0);
+    if (resValue > 0) {
+      const eq = 1 - sum(resLoans.map(l => l.balance)) / resValue, months = resLoans.map(l => l.months_to_payoff);
+      C("home_equity", "Home equity", eq >= 0.2 ? "ok" : "watch", eq, "%", !resLoans.length ? "No mortgage; the home is owned outright."
+        : "Share of your home's estimated value you own. Below 20%, conventional loans usually carry PMI. " +
+          (months.includes(null) ? "At current payments a loan on it never pays off."
+            : `At current payments ${resLoans.length > 1 ? "the last loan is" : "it is"} paid off in ${(Math.max(...months) / 12).toFixed(1)} years.`));
     }
   }
   if (hiDebts.length) C("high_interest_debt", "High-interest debt (balance / annual gross)", "act", hiDebtRatio, "%",
@@ -581,9 +630,11 @@ export function exportMarkdown(A) {
     "Use this to give general, educational observations; the user's full numbers stay local.",
     "", "## Health checks", "", "| Check | Status | Value | Notes |", "|---|---|---|---|"];
   for (const c of A.checks) L.push(`| ${c.label} | ${c.status.toUpperCase()} | ${fmtValue(c.value, c.unit)} | ${c.detail} |`);
-  L.push("", "## Cash flow shape (share of monthly take-home)", "");
-  if (r.home) L.push(`- housing (mortgage, property tax, insurance, HOA) share of take home: ${fmtValue(r.home.housing_share_of_take_home, "%")}`);
-  for (const k of ["expenses_share_of_take_home", "debt_payments_share_of_take_home", "surplus_share_of_take_home"])
+  L.push("", "## Cash flow shape (share of monthly income: take-home pay plus other income)", "");
+  if (r.other_income_share_of_income) L.push(`- other income (e.g. rent) share of income: ${fmtValue(r.other_income_share_of_income, "%")}; ` +
+    `the part that continues after stopping work covers ${fmtValue(r.continuing_income_share_of_spending, "%")} of current spending`);
+  if (r.real_estate) L.push(`- housing (loan payments, property tax, insurance, HOA) share of income: ${fmtValue(r.real_estate.housing_share_of_income, "%")}`);
+  for (const k of ["expenses_share_of_income", "debt_payments_share_of_income", "surplus_share_of_income"])
     L.push(`- ${k.replace(/_/g, " ")}: ${fmtValue(r[k], "%")}`);
   L.push(`- employer 401k contribution as share of gross: ${fmtValue(r.employer_contribution_share_of_gross, "%")}`);
   L.push("", "## Expense mix", "", ...Object.entries(r.expense_mix).map(([k, v]) => `- ${k}: ${fmtPct(v)}`));
@@ -593,21 +644,23 @@ export function exportMarkdown(A) {
     `- total debt / annual gross income: ${fmtValue(r.debt_balance_to_annual_gross, "x")}`,
     "- account tax treatment mix: " + Object.entries(r.tax_bucket_mix).map(([k, v]) => `${k} ${fmtPct(v)}`).join(", "),
     "- investment allocation (excl. cash accounts): " + Object.entries(r.allocation_mix).map(([k, v]) => `${k} ${fmtPct(v)}`).join(", "));
-  if (r.home) {
-    const h = r.home, m = h.mortgage_months_to_payoff;
-    L.push("", "## Home", "",
-      `- housing cost / gross income (front-end): ${fmtValue(h.housing_to_gross, "%")}`,
-      `- all debt payments incl. housing / gross income (back-end): ${fmtValue(h.total_debt_payments_to_gross, "%")}`,
-      `- mortgage loan-to-value: ${fmtValue(h.loan_to_value, "%")}`,
-      `- home equity share of net worth: ${fmtValue(h.equity_share_of_net_worth, "%")}`,
-      `- mortgage payoff at current payment: ${m === null ? "never (payment below interest)" : m === 0 ? "no mortgage" : `${(m / 12).toFixed(1)} years`}`);
+  if (r.real_estate) {
+    const h = r.real_estate, payoff = m => m === null ? "never (payment below interest)" : m === 0 ? "paid off" : `${(m / 12).toFixed(1)} years`;
+    L.push("", "## Real estate", "",
+      `- housing cost where you live / gross income (front-end): ${fmtValue(h.housing_to_gross, "%")}`,
+      `- all debt payments incl. every property / gross income (back-end): ${fmtValue(h.total_debt_payments_to_gross, "%")}`,
+      `- property equity share of net worth: ${fmtValue(h.equity_share_of_net_worth, "%")}`);
+    for (const p of h.properties)
+      L.push(`- ${p.name} (${p.residence ? "lives here" : "not lived in"}): loan-to-value ${fmtValue(p.loan_to_value, "%")}` +
+        (p.loans.length ? "; " + p.loans.map(l => `${l.name} at ${pctTxt(l.apr)}, payoff at current payment ${payoff(l.months_to_payoff)}`).join("; ") : "; no loans"));
   }
   const rp = r.retirement;
   L.push("", "## Retirement plan (today's dollars, user-set assumptions)", "",
     `- withdrawal rate ${pctTxt(rp.withdrawal_rate)} (target ${+rp.target_multiple_of_annual_spending.toFixed(1)}x annual spending); return ${pctTxt(rp.real_return)} a year after inflation`,
     `- years to target if contributions continue: ${r.years_to_fi ?? "not reached"}`,
-    `- stops working (no job income) in ${rp.stop_working_in_years} years; after-tax withdrawals then cover ${fmtValue(rp.after_tax_withdrawal_share_of_current_spending, "%")} of current spending`,
-    `- ${pctTxt(rp.tax_deferred_share_of_investable)} of investable assets are tax-deferred, taxed at an assumed ${pctTxt(rp.retirement_tax_rate)} on withdrawal; Social Security and pensions not included`,
+    `- stops working (no job income) in ${rp.stop_working_in_years} years; after-tax withdrawals plus other income that continues then cover ` +
+      `${fmtValue(rp.take_home_after_stopping_share_of_current_spending, "%")} of current spending (the target is reduced by that continuing income)`,
+    `- ${pctTxt(rp.tax_deferred_share_of_investable)} of investable assets are tax-deferred, taxed at an assumed ${pctTxt(rp.retirement_tax_rate)} on withdrawal; Social Security not included unless entered as other income`,
     `- money lasts: ${rp.money_lasts_years === null ? "30+ years" : `${rp.money_lasts_years} years`} at that withdrawal`);
   if (Object.keys(r.cash_mix).length) {
     L.push("", "## Cash and CDs", "",
@@ -653,8 +706,9 @@ export function reportText(A) {
     rows.push([k, a[k]]);
     if (k === "employer_401k_monthly" && a.taxes_monthly !== null) rows.push(["taxes_withheld_monthly", a.taxes_monthly]);
     if (k === "employer_401k_monthly" && a.other_deductions_monthly) rows.push(["other_deductions_monthly", a.other_deductions_monthly]);
-    if (k === "debt_payments_monthly" && a.home) rows.push(["housing_monthly", a.home.housing]);
-    if (k === "debt_balance" && a.home) rows.push(["home_value", a.home.value], ["mortgage_balance", a.home.mortgage_balance]);
+    if (k === "take_home_monthly" && a.other_income_monthly) rows.push(["other_income_monthly", a.other_income_monthly]);
+    if (k === "debt_payments_monthly" && a.real_estate) rows.push(["housing_monthly", a.real_estate.housing]);
+    if (k === "debt_balance" && a.real_estate) rows.push(["property_value", a.real_estate.value], ["property_loans", a.real_estate.loan_balance]);
   }
   const lines = ["LOCAL REPORT (contains amounts; do not share)", ""];
   const { money } = moneyFormat(A.currency ?? DEFAULT_CURRENCY);

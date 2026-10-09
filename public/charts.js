@@ -249,11 +249,12 @@ function draw() {
       table(["Item", "Per month", "Per year", "Share of gross"], parts.map(p => [p.name, money(p.value), money(p.value * 12), pct(p.value / gm, 1)]))));
   }
 
-  // cash flow
+  // cash flow: income (take-home plus other income) split into where it goes
+  const inc = a.income_monthly, oi = a.other_income_monthly, re = a.real_estate;
   const saved = Math.min(a.saved_from_pay_monthly, Math.max(0, a.surplus_monthly));
   const unassigned = Math.max(0, a.surplus_monthly - saved);
   const flow = [
-    ...(a.home ? [{ name: "Housing", value: a.home.housing, color: C(COLORS.flow.housing) }] : []),
+    ...(re ? [{ name: re.properties.some(p => !p.residence) ? "Property costs" : "Housing", value: re.housing, color: C(COLORS.flow.housing) }] : []),
     { name: "Expenses", value: exp, color: C(COLORS.flow.expenses) },
     { name: "Debt payments", value: debtPay, color: C(COLORS.flow.debt) },
     { name: "Saved from pay", value: saved, color: C(COLORS.flow.saved) },
@@ -263,13 +264,13 @@ function draw() {
     { name: "Your 401k", value: a.employee_401k_monthly, color: C("--s1") },
     { name: "Employer 401k", value: a.employer_401k_monthly, color: C("--s3") },
   ];
-  grid.append(card("Where take-home pay goes", "Per month. 401(k) money comes out before take-home and is shown separately.",
-    a.surplus_monthly < 0 ? el("p", { class: "sub", style: "color:var(--critical);font-weight:600", text: `Spending exceeds take-home by ${money(-a.surplus_monthly)} / month.` }) : null,
-    el("div", { class: "stacklab", text: `Take-home ${money(th)}` }), stackBar(flow, money),
-    legend(flow.map(f => ({ ...f, value: `${money(f.value)} · ${pct(th ? f.value / th : 0)}` }))),
+  grid.append(card(oi ? "Where your income goes" : "Where take-home pay goes", "Per month. 401(k) money comes out before take-home and is shown separately.",
+    a.surplus_monthly < 0 ? el("p", { class: "sub", style: "color:var(--critical);font-weight:600", text: `Spending exceeds ${oi ? "income" : "take-home"} by ${money(-a.surplus_monthly)} / month.` }) : null,
+    el("div", { class: "stacklab", text: oi ? `Income ${money(inc)}: take-home ${money(th)} + other income ${money(oi)}` : `Take-home ${money(th)}` }), stackBar(flow, money),
+    legend(flow.map(f => ({ ...f, value: `${money(f.value)} · ${pct(inc ? f.value / inc : 0)}` }))),
     el("div", { class: "stacklab", text: `Pre-tax retirement ${money(a.employee_401k_monthly + a.employer_401k_monthly)}` }), stackBar(pay401, money),
     legend(pay401.map(f => ({ ...f, value: money(f.value) }))),
-    table(["Item", "Per month", "Share of take-home"], [...flow, ...pay401].map(f => [f.name, money(f.value), th ? pct(f.value / th, 1) : "n/a"]))));
+    table(["Item", "Per month", oi ? "Share of income" : "Share of take-home"], [...flow, ...pay401].map(f => [f.name, money(f.value), inc ? pct(f.value / inc, 1) : "n/a"]))));
 
   // expense mix
   const ex = Object.entries(a.expenses).sort((p, q) => q[1] - p[1]);
@@ -348,20 +349,24 @@ function draw() {
       return [d.name, money(raw.balance || 0), pct(d.apr, 1), money(raw.min_payment || 0), d.months_to_payoff_at_minimum ?? "never"];
     })) : null));
 
-  // home
-  if (a.home) {
-    const h = a.home, H = r.home, m = H.mortgage_months_to_payoff;
-    const segs = [
-      { name: "Equity", value: Math.max(0, h.equity), color: C(COLORS.home.equity) },
-      { name: "Mortgage", value: h.mortgage_balance, color: C(COLORS.home.mortgage) },
-    ];
-    grid.append(card("Home", `Value ${money(h.value)} · equity ${money(h.equity)} · housing ${money(h.housing)} / month.`,
-      h.value > 0 ? el("div", {}, el("div", { class: "stacklab", text: "Who owns the home's value" }), stackBar(segs, money),
-        legend(segs.map(s => ({ ...s, value: `${money(s.value)} · ${pct(s.value / h.value)}` })))) : el("div", { class: "empty", text: "Enter the home's value to see equity." }),
-      el("p", { class: "note", text: `Housing is ${pct(H.housing_to_gross)} of gross income (guideline 28% or less); with other debt payments, ${pct(H.total_debt_payments_to_gross)} (guideline 36%). ` +
-        (m === 0 ? "No mortgage." : m === null ? "At the current payment the mortgage never pays off." : `Mortgage paid off in ${(m / 12).toFixed(1)} years at the current payment.`) }),
-      table(["Item", "Amount"], [["Home value", money(h.value)], ["Mortgage balance", money(h.mortgage_balance)], ["Equity", money(h.equity)],
-        ["Mortgage payment / month", money(h.mortgage_payment)], ["Property tax, insurance, HOA / month", money(h.costs)]])));
+  // real estate: one equity-vs-loans bar per property
+  if (re) {
+    const H = r.real_estate, payoff = m => m === 0 ? "paid off" : m === null ? "never at this payment" : `${(m / 12).toFixed(1)} yr`;
+    const bars = re.properties.map(p => {
+      const segs = [{ name: "Equity", value: Math.max(0, p.equity), color: C(COLORS.home.equity) },
+        ...p.loans.map(l => ({ name: l.name, value: l.balance, color: C(COLORS.home.mortgage) }))];
+      return el("div", {},
+        el("div", { class: "stacklab", text: `${p.name}${p.residence ? " (you live here)" : ""}: value ${money(p.value)} · equity ${money(p.equity)} · ${money(p.outflow)} / month` }),
+        p.value > 0 ? stackBar(segs, money) : el("div", { class: "note", text: "Enter the value to see equity." }),
+        p.loans.length ? el("div", { class: "note", text: p.loans.map(l => `${l.name}: ${money(l.balance)} at ${pct(l.apr, 2)}, paid off in ${payoff(l.months_to_payoff)}`).join(" · ") } ) : null);
+    });
+    grid.append(card("Real estate", `Value ${money(re.value)} · loans ${money(re.loan_balance)} · equity ${money(re.equity)} · housing ${money(re.housing)} / month.`,
+      ...bars,
+      legend([{ name: "Equity", color: C(COLORS.home.equity) }, { name: "Loans", color: C(COLORS.home.mortgage) }]),
+      el("p", { class: "note", text: (H.housing_to_gross !== null ? `Where you live costs ${pct(H.housing_to_gross)} of gross income (guideline 28% or less). ` : "") +
+        `All property and debt payments: ${pct(H.total_debt_payments_to_gross)} of gross income (guideline 36%).` }),
+      table(["Property", "Value", "Loans", "Equity", "Loan payments / mo", "Tax, insurance, HOA / mo"],
+        re.properties.map(p => [p.name + (p.residence ? " (home)" : ""), money(p.value), money(p.loan_balance), money(p.equity), money(p.payments), money(p.costs)]))));
   }
   R.append(grid);
 
@@ -481,18 +486,22 @@ function fillFi(plan, activeKey) {
   }
   const yrs = plan.years_to_fi;
   F.sub.textContent = `Investable assets grow ${pctT(s.real_return)} a year after inflation, plus ${money(a.annual_investment_contributions)} / year of contributions ` +
-    `until you stop working; after that, ${pctT(s.withdrawal_rate)} of the balance is withdrawn each year. Target: ${+(1 / s.withdrawal_rate).toFixed(1)}× annual spending (${money(plan.target)}). ` +
+    `until you stop working; after that, ${pctT(s.withdrawal_rate)} of the balance is withdrawn each year. ` +
+    (a.continuing_income_monthly ? `Target: ${+(1 / s.withdrawal_rate).toFixed(1)}× the yearly spending that other income (${money(a.continuing_income_monthly)} / month) doesn't cover (${money(plan.target)}). `
+      : `Target: ${+(1 / s.withdrawal_rate).toFixed(1)}× annual spending (${money(plan.target)}). `) +
     (yrs == null ? "Not reached within 80 years at current contributions." : yrs === 0 ? "Target already reached." : `Reached in about ${yrs} years if you keep contributing.`);
   const when = (ri === 0 ? "If you stop working now" : `If you stop working in ${ri} years`) + (age ? ` (age ${age + ri})` : "");
   F.summary.replaceChildren(
     el("div", { class: "lab", text: `${when}, in today's dollars:` }),
-    el("div", { class: "big", text: `≈ ${money(at.monthly_after_tax)} / month take-home` }),
+    el("div", { class: "big", text: `≈ ${money(at.monthly_take_home)} / month take-home` }),
     el("div", { class: "line", text: `${money(at.monthly_before_tax)} / month before tax, withdrawn from ${money(at.balance)} invested` +
+      (at.other_income_monthly ? `, plus ${money(at.other_income_monthly)} of other income that continues` : "") +
       (at.share_of_spending != null ? ` · ${pct(at.share_of_spending)} of today's spending (${money(a.spending_monthly)} / month)` : "") }),
     el("div", { class: "line", text: at.lasts_years == null ? "At this withdrawal the money lasts 30+ years."
       : `At this withdrawal the money runs out after ${at.lasts_years} years` + (age ? ` (age ${age + ri + at.lasts_years}).` : ".") }),
     el("p", { class: "note", text: `Only withdrawals from 401(k), 403(b), and traditional IRAs (${pct(a.fi_base.tax_deferred_share)} of your investments today) are taxed, at the rate above. ` +
-      "Roth and HSA withdrawals are tax-free; brokerage gains tax, Social Security, and pensions aren't included. Cash accounts and the home aren't counted." }));
+      "Roth and HSA withdrawals are tax-free; brokerage gains tax isn't included. Social Security or a pension counts only if entered under Other income with \"After work\" checked. " +
+      "Cash accounts and real estate aren't counted." }));
   const proj = plan.projection, last = proj.length - 1;
   F.table.replaceChildren(table(["Year", "Investable", "Target", "Withdrawal / month"],
     proj.filter(p => p.year % 5 === 0 || p.year === ri || p.year === last).map(p => [p.year + (p.year === ri ? " (stop working)" : ""),

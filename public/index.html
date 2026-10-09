@@ -90,6 +90,24 @@
       </div>
     </details>
 
+    <details class="sec" id="sec-other-income" open>
+      <summary>Other income <span class="sum" x-text="sum('other_income')"></span></summary>
+      <div class="secbody">
+        <div class="note">Money besides your paycheck, per month: rent you collect, side work, a pension. Enter what you actually receive.</div>
+        <div class="colhead row oinc" x-show="hasOtherIncome()"><span></span><span>Source</span><span>Per month</span><span title="Keeps paying after you stop working">After work</span><span></span></div>
+        <template x-for="(o, i) in data.other_income" :key="rowKey(o)">
+          <div class="row oinc" data-drag>
+            <button class="grip" type="button" aria-label="Reorder income: drag, or press up or down arrow" title="Drag to reorder" @pointerdown="dragStart('other_income', $event)" @keydown="dragKey('other_income', i, $event)"></button>
+            <input class="txt" type="text" aria-label="Income source" placeholder="e.g. Rent" x-model="o.name">
+            <div class="num money"><input type="text" inputmode="decimal" aria-label="Monthly amount" autocomplete="off" x-money:amount="o"></div>
+            <label class="cont" title="Keeps paying after you stop working"><input type="checkbox" aria-label="Keeps paying after you stop working" x-model="o.continues"></label>
+            <button class="btn icon" type="button" aria-label="Remove income" title="Remove" @click="remove('other_income', i)">✕</button>
+          </div>
+        </template>
+        <div class="addrow"><button class="btn small" type="button" @click="addOtherIncome()">+ Income</button></div>
+      </div>
+    </details>
+
     <details class="sec" id="sec-retirement" open>
       <summary>401(k) <span class="sum" x-text="sum('retirement')"></span></summary>
       <div class="secbody">
@@ -180,28 +198,36 @@
     </details>
 
     <details class="sec" id="sec-home" open>
-      <summary>Home <span class="sum" x-text="sum('home')"></span></summary>
+      <summary>Real estate <span class="sum" x-text="sum('home')"></span></summary>
       <div class="secbody">
-        <label class="toggle"><input type="checkbox" :checked="hasHome()" @change="toggleHome($event)"> I own a home</label>
-        <div class="note">Off: rent or other housing goes under Monthly expenses.</div>
-        <template x-if="hasHome()">
-          <div>
-            <div class="field"><label for="f-hv">Home value</label>
-              <div class="num money"><input type="text" id="f-hv" inputmode="decimal" autocomplete="off" x-money:value="data.home"></div>
-              <div class="hint">Your estimate of what it would sell for today.</div></div>
-            <div class="field"><label for="f-mb">Mortgage balance</label>
-              <div class="num money"><input type="text" id="f-mb" inputmode="decimal" autocomplete="off" x-money:mortgage_balance="data.home"></div>
-              <div class="hint">Principal still owed; 0 if paid off.</div></div>
-            <div class="field"><label for="f-mapr">Mortgage rate</label>
-              <div class="num pct"><input id="f-mapr" type="number" step="any" inputmode="decimal" :value="pctVal(data.home, 'mortgage_apr')" @input="setPct(data.home, 'mortgage_apr', $event)"></div></div>
-            <div class="field"><label for="f-mp">Mortgage payment / month</label>
-              <div class="num money"><input type="text" id="f-mp" inputmode="decimal" autocomplete="off" x-money:mortgage_payment="data.home"></div>
-              <div class="hint">Principal and interest only.</div></div>
-            <div class="field"><label for="f-hc">Property tax, insurance, HOA / month</label>
-              <div class="num money"><input type="text" id="f-hc" inputmode="decimal" autocomplete="off" x-money:costs_monthly="data.home"></div>
-              <div class="hint">Escrow, PMI, and HOA dues. Don't also list these, or the mortgage, under expenses or debts.</div></div>
+        <div class="note">Homes and other property you own. Rent you pay goes under Monthly expenses; rent you collect goes under Other income.</div>
+        <template x-for="(p, i) in data.properties" :key="rowKey(p)">
+          <div class="acct prop" data-drag>
+            <div class="top">
+              <button class="grip" type="button" aria-label="Reorder property: drag, or press up or down arrow" title="Drag to reorder" @pointerdown="dragStart('properties', $event)" @keydown="dragKey('properties', i, $event)"></button>
+              <input class="txt" type="text" aria-label="Property name" placeholder="e.g. Home, Rental" x-model="p.name">
+              <label class="toggle"><input type="checkbox" x-model="p.residence"> I live here</label>
+              <button class="btn icon" type="button" aria-label="Remove property" title="Remove" @click="remove('properties', i)">✕</button>
+            </div>
+            <div class="bal"><span>Value</span>
+              <div class="num money"><input type="text" inputmode="decimal" aria-label="Property value" autocomplete="off" x-money:value="p"></div></div>
+            <div class="bal"><span>Property tax, insurance, HOA / month</span>
+              <div class="num money"><input type="text" inputmode="decimal" aria-label="Property tax, insurance, and HOA per month" autocomplete="off" x-money:costs_monthly="p"></div></div>
+            <div class="colhead row loan" x-show="hasLoans(p)"><span>Loan</span><span>Balance</span><span>Rate</span><span>P&amp;I / mo</span><span></span></div>
+            <template x-for="(l, j) in p.loans" :key="rowKey(l)">
+              <div class="row loan">
+                <input class="txt" type="text" aria-label="Loan name" placeholder="e.g. HELOC" x-model="l.name">
+                <div class="num money"><input type="text" inputmode="decimal" aria-label="Loan balance" autocomplete="off" x-money:balance="l"></div>
+                <div class="num pct"><input type="number" step="any" inputmode="decimal" aria-label="Loan rate" :value="pctVal(l, 'apr')" @input="setPct(l, 'apr', $event)"></div>
+                <div class="num money"><input type="text" inputmode="decimal" aria-label="Monthly principal and interest" autocomplete="off" x-money:payment="l"></div>
+                <button class="btn icon" type="button" aria-label="Remove loan" title="Remove" @click="removeLoan(p, j)">✕</button>
+              </div>
+            </template>
+            <div class="addrow"><button class="btn small" type="button" @click="addLoan(p)">+ Loan</button></div>
           </div>
         </template>
+        <div class="note" x-show="hasProperties()">Loan payments are principal and interest only. Don't also list these loans or property costs under Debts or Monthly expenses.</div>
+        <div class="addrow"><button class="btn small" type="button" @click="addProperty()">+ Property</button></div>
       </div>
     </details>
 

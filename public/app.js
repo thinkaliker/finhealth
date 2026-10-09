@@ -8,7 +8,7 @@ import { renderResults, drawCharts, setFiHandler } from "./charts.js";
 import { detectStore } from "./store.js";
 
 let nextId = 1;
-const LISTS = ["expenses", "debts", "accounts", "history"];
+const LISTS = ["expenses", "debts", "accounts", "history", "properties", "other_income"];
 
 /** Shape data for editing: every section present, every list row tagged with a stable _id for x-for keys. */
 function forEditing(d) {
@@ -18,12 +18,12 @@ function forEditing(d) {
   for (const a of out.accounts) if (a.allocation) a.allocation = { ...a.allocation };
   if (out.retirement.match_tiers) out.retirement.match_tiers = out.retirement.match_tiers.map(t => ({ ...t, _id: nextId++ }));
   if (d.savings) out.savings = { ...d.savings };
-  if (d.home) out.home = { ...d.home };
+  for (const p of out.properties) p.loans = (p.loans ?? []).map(l => ({ ...l, _id: nextId++ }));
   return out;
 }
 /** Strip editor-only keys (leading underscore) and proxies. */
 const plain = d => JSON.parse(JSON.stringify(d, (k, v) => (k.startsWith("_") ? undefined : v)));
-const blank = () => ({ income: {}, retirement: {}, profile: {}, fi: {}, expenses: [], debts: [], accounts: [], history: [] });
+const blank = () => ({ income: {}, retirement: {}, profile: {}, fi: {}, expenses: [], debts: [], accounts: [], history: [], properties: [], other_income: [] });
 const fmts = {};
 const fmtFor = code => fmts[code ?? DEFAULT_CURRENCY] ??= moneyFormat(code ?? DEFAULT_CURRENCY);
 let money = fmtFor().money; // follows data.currency; set in recompute()
@@ -168,7 +168,7 @@ Alpine.data("app", () => ({
 
   // ---------------------------------------------------------------- state
   setData(d, saved) {
-    normalize(d); // validate before accepting; throws with a readable message
+    d = normalize(d); // validate before accepting (throws with a readable message); also upgrades older formats
     this.data = forEditing(d);
     this.savedSnap = saved ? this.snap() : "";
     this.onboarding = false;
@@ -197,7 +197,8 @@ Alpine.data("app", () => ({
       savings: n.savings ? money(a.saved_from_pay_monthly) + " / mo" : "assumed: full surplus",
       expenses: money(a.expenses_monthly) + " / mo",
       debts: n.debts.length + " · " + money(a.debt_balance),
-      home: a.home ? money(a.home.housing) + " / mo · equity " + money(a.home.equity) : "off",
+      home: a.real_estate ? n.properties.length + " · equity " + money(a.real_estate.equity) : "none",
+      other_income: n.other_income.length ? money(a.other_income_monthly) + " / mo" : "none",
       accounts: n.accounts.length + " · " + money(a.assets),
       history: n.history.length + " snapshot" + (n.history.length === 1 ? "" : "s"),
     };
@@ -328,14 +329,26 @@ Alpine.data("app", () => ({
   addTier() { this.data.retirement.match_tiers.push({ rate: null, pct: null, _id: nextId++ }); },
   removeTier(i) { this.data.retirement.match_tiers.splice(i, 1); },
   tierText(i) { return i === 0 ? "on the first" : "on the next"; },
-  hasHome() { return !!this.data.home; },
-  toggleHome(ev) {
-    if (ev.target.checked) this.data.home = { value: 0, mortgage_balance: 0, mortgage_apr: 0, mortgage_payment: 0, costs_monthly: 0 };
-    else delete this.data.home;
+  // real estate: properties, each with loans; the first one added is assumed to be where you live
+  hasProperties() { return this.data.properties.length > 0; },
+  addProperty() {
+    const first = !this.hasProperties();
+    this.data.properties.push({ name: first ? "Home" : "", residence: first, value: null, costs_monthly: null, _id: nextId++,
+      loans: [{ name: "Mortgage", balance: null, apr: null, payment: null, _id: nextId++ }] });
+  },
+  addLoan(p) { p.loans.push({ name: "", balance: null, apr: null, payment: null, _id: nextId++ }); },
+  removeLoan(p, j) { p.loans.splice(j, 1); },
+  hasLoans(p) { return p.loans.length > 0; },
+  // other income: rent, side work, a pension
+  hasOtherIncome() { return this.data.other_income.length > 0; },
+  addOtherIncome() {
+    this.data.other_income.push({ name: "", amount: null, continues: false, _id: nextId++ });
+    this.$nextTick(() => this.focusLastRow("sec-other-income"));
   },
 
   // ---------------------------------------------------------------- lists
   remove(list, i) { this.data[list].splice(i, 1); },
+  focusLastRow(sec) { [...this.$root.querySelectorAll(`#${sec} [data-drag]`)].pop()?.querySelector("input")?.focus(); },
   moveRow(list, from, to) { const a = this.data[list]; a.splice(to, 0, a.splice(from, 1)[0]); },
   dragStart(list, ev) {
     if (ev.button !== 0) return;
@@ -353,7 +366,7 @@ Alpine.data("app", () => ({
   },
   addExpense() {
     this.data.expenses.push({ name: "", amount: 0, _id: nextId++ });
-    this.$nextTick(() => this.$root.querySelector("#sec-expenses .row:last-of-type input")?.focus());
+    this.$nextTick(() => this.focusLastRow("sec-expenses"));
   },
   addDebt() { this.data.debts.push({ name: "", balance: 0, apr: 0, min_payment: 0, _id: nextId++ }); },
   addAccount() { this.data.accounts.push({ name: "", type: "brokerage", balance: 0, allocation: { stocks: 1 }, _id: nextId++ }); },

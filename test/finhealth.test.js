@@ -9,9 +9,10 @@ const data = normalize(EXAMPLE);
 const A = analyze(data, TODAY);
 const close = (a, b) => assert.ok(Math.abs(a - b) < 1e-9, `${a} != ${b}`);
 
+const NOT_AMOUNTS = new Set(["months_to_payoff", "apr"]); // counts and rates that sit next to amounts
 function amountsIn(o, out = new Set()) {
   if (Array.isArray(o)) o.forEach(v => amountsIn(v, out));
-  else if (o && typeof o === "object") Object.values(o).forEach(v => amountsIn(v, out));
+  else if (o && typeof o === "object") Object.entries(o).forEach(([k, v]) => NOT_AMOUNTS.has(k) || amountsIn(v, out));
   else if (typeof o === "number" && Math.abs(o) >= 100) out.add(Math.round(Math.abs(o)));
   return out;
 }
@@ -20,7 +21,7 @@ function assertNoLeaks(input, R) {
   const amounts = amountsIn(input);
   for (const v of Object.values(R.amounts)) if (typeof v === "number") amountsIn(v, amounts);
   amountsIn(R.amounts.cds.map(c => c.balance), amounts);
-  amountsIn(R.amounts.home ?? {}, amounts);
+  amountsIn(R.amounts.real_estate ?? {}, amounts);
   for (const text of [exportMarkdown(R), JSON.stringify(exportJSON(R))]) {
     const nums = (text.match(/\d[\d,]*\.?\d*/g) ?? []).map(n => Number(n.replace(/,/g, "")));
     const leaked = nums.filter(n => n >= 100 && n !== 100 && !(n >= 2000 && n < 2100) && [...amounts].some(a => Math.abs(n - a) < 1));
@@ -32,7 +33,7 @@ test("export contains no input or derived currency amounts", () => assertNoLeaks
 
 test("core ratios", () => {
   const r = A.ratios, burn = 4350 + 485;
-  close(r.expenses_share_of_take_home, 4350 / 6200);
+  close(r.expenses_share_of_income, 4350 / 6200);
   close(r.liquid_cash_months, (4500 + 7000) / burn);
   // rung 1 matures in 68 days -> full; rung 2 in 250 days -> minus 3 months of interest
   close(r.emergency_fund_months, (4500 + 7000 + 2500 + 2500 - 2500 * 0.045 / 12 * 3) / burn);
@@ -85,7 +86,7 @@ test("take-home per biweekly paycheck averages to monthly; export stays amount-f
   const d = normalize(input);
   const B = analyze(d, TODAY);
   close(B.amounts.take_home_monthly, 2850 * 26 / 12);
-  close(B.ratios.expenses_share_of_take_home, 4350 / (2850 * 26 / 12));
+  close(B.ratios.expenses_share_of_income, 4350 / (2850 * 26 / 12));
   assert.ok(B.assumptions.some(a => /biweekly/.test(a)));
   assert.doesNotMatch(exportMarkdown(B), /2,?850|6,?175/);
   assert.deepEqual(normalize(JSON.parse(JSON.stringify(d))), d);
@@ -231,29 +232,73 @@ test("money inputs: grouped display and parsing follow the currency's convention
   assert.equal(moneyFormat("USD").symbolAfter, false);
 });
 
-test("home: housing is its own cash-flow line, equity counts in net worth, housing ratios checked", () => {
+test("real estate: an older single home converts to one residence and keeps its results", () => {
   const input = { ...EXAMPLE, expenses: EXAMPLE.expenses.filter(e => e.name !== "housing"),
     home: { value: 420000, mortgage_balance: 310000, mortgage_apr: 0.0625, mortgage_payment: 1910, costs_monthly: 520 } };
   const d = normalize(input), H = analyze(d, TODAY), grossM = 115000 / 12, burn = 2250 + 485 + 2430;
+  assert.deepEqual(d.properties, [{ name: "Home", residence: true, value: 420000, costs_monthly: 520,
+    loans: [{ name: "Mortgage", balance: 310000, apr: 0.0625, payment: 1910 }] }]);
+  assert.equal(d.home, undefined);
   close(H.amounts.surplus_monthly, 6200 - burn);
   close(H.amounts.net_worth, A.amounts.net_worth + 110000);
   close(H.amounts.investable, A.amounts.investable);
   close(H.ratios.emergency_fund_months, (4500 + 7000 + 2500 + 2500 - 2500 * 0.045 / 12 * 3) / burn);
-  close(H.ratios.home.housing_to_gross, 2430 / grossM);
-  close(H.ratios.home.total_debt_payments_to_gross, (2430 + 485) / grossM);
-  close(H.ratios.home.loan_to_value, 310000 / 420000);
-  assert.equal(H.ratios.home.mortgage_months_to_payoff, 360);
+  close(H.ratios.real_estate.housing_to_gross, 2430 / grossM);
+  close(H.ratios.real_estate.total_debt_payments_to_gross, (2430 + 485) / grossM);
+  close(H.ratios.real_estate.properties[0].loan_to_value, 310000 / 420000);
+  assert.equal(H.ratios.real_estate.properties[0].loans[0].months_to_payoff, 360);
   const st = Object.fromEntries(H.checks.map(c => [c.key, c.status]));
   assert.deepEqual([st.housing, st.dti_total, st.home_equity], ["ok", "ok", "ok"]);
   assert.match(H.checks.find(c => c.key === "dti").label, /excluding housing/);
-  assert.match(exportMarkdown(H), /## Home[\s\S]*payoff at current payment: 30\.0 years/);
+  assert.match(H.checks.find(c => c.key === "home_equity").detail, /it is paid off in 30\.0 years/);
+  assert.match(exportMarkdown(H), /## Real estate[\s\S]*Home \(lives here\): loan-to-value 74%; Mortgage at 6\.25%, payoff at current payment 30\.0 years/);
   assertNoLeaks(input, H);
   assert.deepEqual(normalize(JSON.parse(JSON.stringify(d))), d);
+  assert.throws(() => normalize({ home: { value: 1 }, properties: [] }), /not both/);
 });
 
-test("home: renters unaffected; double-listed mortgage flagged; bad rate rejected", () => {
-  assert.equal(A.ratios.home, null);
-  assert.equal(A.amounts.home, null);
+test("real estate: a HELOC on the home plus a rental, with rent as other income", () => {
+  const input = { ...EXAMPLE, expenses: EXAMPLE.expenses.filter(e => e.name !== "housing"),
+    properties: [
+      { name: "Home", residence: true, value: 420000, costs_monthly: 520, loans: [
+        { name: "Mortgage", balance: 310000, apr: 0.0625, payment: 1910 }, { name: "HELOC", balance: 30000, apr: 0.085, payment: 400 }] },
+      { name: "Rental", residence: false, value: 300000, costs_monthly: 400, loans: [{ name: "Mortgage", balance: 200000, apr: 0.07, payment: 1500 }] }],
+    other_income: [{ name: "Rent", amount: 2200, continues: true }, { name: "Tutoring", amount: 300 }, { name: "", amount: 50 }] };
+  const d = normalize(input), R = analyze(d, TODAY);
+  assert.deepEqual(d.other_income, [{ name: "Rent", amount: 2200, continues: true }, { name: "Tutoring", amount: 300, continues: false }]);
+  const income = 6200 + 2500, grossInc = 115000 / 12 + 2500, homeOut = 1910 + 400 + 520, rentalOut = 1500 + 400;
+  close(R.amounts.income_monthly, income);
+  close(R.amounts.surplus_monthly, income - 2250 - 485 - homeOut - rentalOut);
+  close(R.amounts.net_worth, A.amounts.net_worth + (420000 - 340000) + (300000 - 200000));
+  close(R.ratios.real_estate.housing_to_gross, homeOut / grossInc);                     // only where you live
+  close(R.ratios.real_estate.total_debt_payments_to_gross, (homeOut + rentalOut + 485) / grossInc); // every loan
+  close(R.ratios.expenses_share_of_income, 2250 / income);
+  close(R.ratios.other_income_share_of_income, 2500 / income);
+  close(R.checks.find(c => c.key === "home_equity").value, 1 - 340000 / 420000);
+  assert.match(R.checks.find(c => c.key === "home_equity").detail, /the last loan is paid off/);
+  // rent keeps paying after you stop working: it shrinks the target and adds to take-home then
+  const spendYear = (2250 + 485 + homeOut + rentalOut) * 12;
+  close(R.amounts.fi_plan.target, (spendYear - 2200 * 12) / 0.04);
+  close(R.amounts.fi_plan.at_retirement.monthly_take_home, R.amounts.fi_plan.at_retirement.monthly_after_tax + 2200);
+  assert.match(exportMarkdown(R), /Rental \(not lived in\)[\s\S]*other income \(e\.g\. rent\) share of income|other income \(e\.g\. rent\) share of income[\s\S]*Rental \(not lived in\)/);
+  assertNoLeaks(input, R);
+  assert.deepEqual(normalize(JSON.parse(JSON.stringify(d))), d);
+  assert.match(reportText(R), /other_income_monthly\s+\$2,500[\s\S]*property_loans\s+\$540,000/);
+  // a rental with no rent listed is pointed out; bad loan rates are rejected
+  assert.ok(analyze(normalize({ properties: [{ name: "Cabin", value: 1 }] }), TODAY).assumptions.some(a => /no rent listed/.test(a)));
+  assert.throws(() => normalize({ properties: [{ name: "X", loans: [{ apr: 6.5 }] }] }), /fraction/);
+});
+
+test("FI: income that continues can cover all spending", () => {
+  const R = analyze(normalize({ expenses: [{ name: "all", amount: 3000 }], other_income: [{ name: "Pension", amount: 3500, continues: true }] }), TODAY);
+  assert.equal(R.amounts.fi_plan.target, 0);
+  assert.equal(R.ratios.years_to_fi, 0);
+  assert.equal(R.ratios.fi_progress, 1);
+});
+
+test("real estate: renters unaffected; double-listed mortgage flagged; bad rate rejected", () => {
+  assert.equal(A.ratios.real_estate, null);
+  assert.equal(A.amounts.real_estate, null);
   assert.ok(!A.checks.some(c => ["housing", "dti_total", "home_equity"].includes(c.key)));
   const R = analyze(normalize({ home: { value: 300000, mortgage_balance: 0 }, debts: [{ name: "Mortgage", balance: 1, apr: 0.06, min_payment: 1 }] }), TODAY);
   assert.ok(R.assumptions.some(a => /Mortgage .*counted twice/.test(a)));
