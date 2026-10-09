@@ -15,6 +15,7 @@ export const FI_MULTIPLE = 25;              // 4% withdrawal rule of thumb
 export const ASSUMED_REAL_RETURN = 0.05;
 export const CD_PENALTY_FREE_DAYS = 90;     // a CD maturing this soon counts in full toward the emergency fund
 export const CD_DEFAULT_PENALTY_MONTHS = 3; // early-withdrawal penalty, in months of interest, when not given
+export const BIWEEKLY_TO_MONTHLY = 26 / 12;  // 26 paychecks a year; two months get a third one
 
 // ---------------------------------------------------------------- dates (ISO strings, UTC arithmetic)
 
@@ -72,6 +73,11 @@ export function normalize(input) {
     for (const k of Object.keys(d[sec])) d[sec][k] = num(d[sec][k], `${sec}.${k}`);
   }
   if (d.profile && d.profile.age === 0) delete d.profile.age;
+  // take-home is per month or per biweekly paycheck; the key that is present says which
+  if (d.income && "take_home_biweekly" in d.income) {
+    if (d.income.take_home_monthly) throw new Error("income: give take_home_monthly or take_home_biweekly, not both");
+    delete d.income.take_home_monthly;
+  }
   if (d.savings && Object.keys(d.savings).length === 0) delete d.savings;
 
   // expenses: canonical form is [{name, amount}]; an object {name: amount} is accepted too
@@ -145,7 +151,9 @@ export function payoffMonths(balance, apr, payment) {
 export function analyze(d, today = todayISO()) {
   const assumptions = [];
   const inc = d.income ?? {}, ret = d.retirement ?? {};
-  const takeHome = inc.take_home_monthly ?? 0;
+  const biweekly = "take_home_biweekly" in inc;
+  const takeHome = biweekly ? inc.take_home_biweekly * BIWEEKLY_TO_MONTHLY : inc.take_home_monthly ?? 0;
+  if (biweekly) assumptions.push("Take-home pay was entered per biweekly paycheck and averaged to monthly (26 paychecks over 12 months); two months a year have a third paycheck.");
   const grossM = (inc.gross_annual ?? 0) / 12;
   const expenses = {};
   for (const r of d.expenses ?? []) expenses[r.name] = (expenses[r.name] ?? 0) + r.amount;

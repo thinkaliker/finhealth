@@ -63,6 +63,8 @@ details.sec > summary .sum { margin-left: auto; font-weight: 400; color: var(--t
 .secbody { padding: 0 14px 14px; }
 .field { display: grid; grid-template-columns: 1fr 140px; align-items: center; gap: 8px; margin: 6px 0; }
 .field label { color: var(--text-2); }
+.field .lblsel { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.field .lblsel select { width: auto; }
 .field .hint { grid-column: 1 / -1; margin-top: -4px; font-size: 11px; color: var(--text-3); }
 .num { position: relative; }
 .num input { width: 100%; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); text-align: right; }

@@ -77,6 +77,20 @@ test("form input is coerced; blank rows dropped; bad allocation rejected", () =>
   assert.throws(() => normalize({ income: { take_home_monthly: "lots" } }), /expected a number/);
 });
 
+test("take-home per biweekly paycheck averages to monthly; export stays amount-free", () => {
+  const input = { ...EXAMPLE, income: { take_home_biweekly: 2850, gross_annual: 115000 } };
+  const d = normalize(input);
+  const B = analyze(d, TODAY);
+  close(B.amounts.take_home_monthly, 2850 * 26 / 12);
+  close(B.ratios.expenses_share_of_take_home, 4350 / (2850 * 26 / 12));
+  assert.ok(B.assumptions.some(a => /biweekly/.test(a)));
+  assert.doesNotMatch(exportMarkdown(B), /2,?850|6,?175/);
+  assert.deepEqual(normalize(JSON.parse(JSON.stringify(d))), d);
+  // the key present picks the period, even at zero; a zero monthly alongside is dropped, a real one is an error
+  assert.deepEqual(normalize({ income: { take_home_monthly: 0, take_home_biweekly: null } }).income, { take_home_biweekly: 0 });
+  assert.throws(() => normalize({ income: { take_home_monthly: 6000, take_home_biweekly: 2800 } }), /not both/);
+});
+
 test("expenses accepted as an object too", () => {
   assert.deepEqual(normalize({ expenses: { rent: 100 } }).expenses, [{ name: "rent", amount: 100 }]);
 });

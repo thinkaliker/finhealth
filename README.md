@@ -60,7 +60,7 @@ JSON. See `public/example.json`.
 {
   "version": 1,
   "profile":    { "age": 34 },                                   // optional
-  "income":     { "take_home_monthly": 6200, "gross_annual": 115000 },
+  "income":     { "take_home_monthly": 6200, "gross_annual": 115000 },  // or "take_home_biweekly": 2860 per paycheck
   "retirement": { "employee_contribution_pct": 0.06, "employer_match_rate": 0.5,
                   "employer_match_limit_pct": 0.06, "employer_nonelective_pct": 0 },
   "savings":    { "monthly_to_investments": 800, "monthly_to_cash": 300 },  // optional
@@ -77,7 +77,7 @@ JSON. See `public/example.json`.
 }
 ```
 
-Rates and percentages are fractions (`0.045` = 4.5%); the web form shows them as percents. Account types: `cash`, `hysa`, `cd`, `brokerage`, `401k`, `403b`, `traditional_ira`, `roth_ira`, `roth_401k`, `hsa`. Investment accounts take an `allocation` (`stocks`, `bonds`, `cash`, `single_stock`, `other`) summing to 1.
+Rates and percentages are fractions (`0.045` = 4.5%); the web form shows them as percents. Take-home pay is either `take_home_monthly` or `take_home_biweekly` (one paycheck), not both; biweekly is averaged to monthly as × 26 ÷ 12, so months with a third paycheck are spread across the year. Account types: `cash`, `hysa`, `cd`, `brokerage`, `401k`, `403b`, `traditional_ira`, `roth_ira`, `roth_401k`, `hsa`. Investment accounts take an `allocation` (`stocks`, `bonds`, `cash`, `single_stock`, `other`) summing to 1.
 
 CDs: `renews: true` models a ladder rung. Once `maturity_date` passes, the next maturity rolls forward by `term_months`. For the emergency fund, a CD maturing within 90 days counts in full; later ones count net of `penalty_months` of interest. A non-renewing CD past maturity raises a "watch" check.
 

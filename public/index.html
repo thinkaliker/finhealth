@@ -54,9 +54,17 @@
     <details class="sec" id="sec-income" open>
       <summary>Income <span class="sum" x-text="sum('income')"></span></summary>
       <div class="secbody">
-        <div class="field"><label for="f-th">Take-home pay / month</label>
-          <div class="num"><input id="f-th" type="number" step="any" min="0" inputmode="decimal" x-model.number="data.income.take_home_monthly"></div>
-          <div class="hint">Net pay deposited to your bank.</div></div>
+        <div class="field"><div class="lblsel"><label for="f-th">Take-home pay</label>
+            <select class="txt" aria-label="Pay period" @change="setPayPeriod($event)">
+              <template x-for="p in payPeriods" :key="p.value">
+                <option :value="p.value" :selected="isPeriod(p)" x-text="p.label"></option>
+              </template>
+            </select></div>
+          <template x-if="isMonthly()">
+            <div class="num"><input id="f-th" type="number" step="any" min="0" inputmode="decimal" x-model.number="data.income.take_home_monthly"></div></template>
+          <template x-if="isBiweekly()">
+            <div class="num"><input id="f-th" type="number" step="any" min="0" inputmode="decimal" x-model.number="data.income.take_home_biweekly"></div></template>
+          <div class="hint" x-text="takeHomeHint()"></div></div>
         <div class="field"><label for="f-gross">Gross salary / year</label>
           <div class="num"><input id="f-gross" type="number" step="any" min="0" inputmode="decimal" x-model.number="data.income.gross_annual"></div>
           <div class="hint">Needed for 401k amounts and debt-to-income.</div></div>

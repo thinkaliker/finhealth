@@ -2,7 +2,7 @@
 // results and charts from charts.js. Template expressions only reference properties and methods
 // defined here, which is what the CSP build requires (no eval).
 import Alpine from "./vendor/alpine-csp.esm.min.js";
-import { normalize, analyze, exportMarkdown, todayISO, addMonths } from "./finhealth.js";
+import { normalize, analyze, exportMarkdown, todayISO, addMonths, BIWEEKLY_TO_MONTHLY } from "./finhealth.js";
 import { renderResults, drawCharts } from "./charts.js";
 import { detectStore } from "./store.js";
 
@@ -40,6 +40,7 @@ Alpine.data("app", () => ({
     { value: "traditional_ira", label: "Traditional IRA" }, { value: "roth_ira", label: "Roth IRA" },
     { value: "roth_401k", label: "Roth 401(k)" }, { value: "hsa", label: "HSA" },
   ],
+  payPeriods: [{ value: "month", label: "per month" }, { value: "biweekly", label: "every 2 weeks" }],
   allocKeys: [
     { key: "stocks", label: "Stocks" }, { key: "bonds", label: "Bonds" }, { key: "cash", label: "Cash" },
     { key: "single_stock", label: "1 stock" }, { key: "other", label: "Other" },
@@ -178,6 +179,24 @@ Alpine.data("app", () => ({
   setPct(obj, key, ev) {
     const raw = ev.target.value.trim();
     obj[key] = raw === "" ? null : Number.isFinite(Number(raw)) ? Number(raw) / 100 : raw;
+  },
+  // take-home pay: stored as take_home_monthly or take_home_biweekly, whichever key is present
+  isBiweekly() { return "take_home_biweekly" in this.data.income; },
+  isMonthly() { return !this.isBiweekly(); },
+  isPeriod(p) { return (p.value === "biweekly") === this.isBiweekly(); },
+  /** Converts the amount on switch so results don't jump before the user types their paycheck. */
+  setPayPeriod(ev) {
+    const inc = this.data.income, toBiweekly = ev.target.value === "biweekly";
+    if (toBiweekly === this.isBiweekly()) return;
+    const v = Number(toBiweekly ? inc.take_home_monthly : inc.take_home_biweekly) || 0;
+    const conv = toBiweekly ? v / BIWEEKLY_TO_MONTHLY : v * BIWEEKLY_TO_MONTHLY;
+    delete inc.take_home_monthly; delete inc.take_home_biweekly;
+    inc[toBiweekly ? "take_home_biweekly" : "take_home_monthly"] = v ? Math.round(conv * 100) / 100 : null;
+  },
+  takeHomeHint() {
+    if (!this.isBiweekly()) return "Net pay deposited to your bank.";
+    const m = (Number(this.data.income.take_home_biweekly) || 0) * BIWEEKLY_TO_MONTHLY;
+    return `Net pay per paycheck. Averages ${money(m)} / month (26 paychecks a year).`;
   },
   hasSavings() { return !!this.data.savings; },
   toggleSavings(ev) {
