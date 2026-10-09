@@ -1,7 +1,7 @@
 // Results view: check cards, charts (hand-built SVG/HTML), and the LLM export panel.
 // Plain DOM code; all labels go through textContent. Colors come from CSS custom properties so
 // light/dark steps are chosen in styles.css, not computed here.
-import { CASH_LIKE, todayISO } from "./finhealth.js";
+import { CASH_LIKE, todayISO, fiPlan, FI_RANGES } from "./finhealth.js";
 
 const S = { analysis: null, data: null, growthView: "amounts", root: null };
 const NS = "http://www.w3.org/2000/svg";
@@ -211,6 +211,7 @@ function draw() {
   if (!A) return;
   const a = A.amounts, r = A.ratios;
   const C = k => css(k);
+  S.fiPlan = null; // any slider preview is superseded by the fresh analysis
   R.replaceChildren();
 
   // checks
@@ -366,15 +367,8 @@ function draw() {
   }
   R.append(grid);
 
-  // FI projection
-  const proj = a.projection;
-  const fiYear = r.years_to_fi;
-  R.append(card("Projection to financial independence",
-    `Investable assets growing at 5% after inflation plus ${money(a.annual_investment_contributions)} / year of contributions, against 25× annual spending (${money(proj[0].target)}). ` +
-    (fiYear == null ? "Target not reached within the horizon." : fiYear === 0 ? "Target already reached." : `Reached in about ${fiYear} years.`),
-    legend([{ name: "Projected investable", kind: "line", color: C("--s1") }, { name: "Target (25× spending)", kind: "dash" }]),
-    el("div", { class: "chart", id: "ch-proj" }),
-    table(["Year", "Projected investable", "Target"], proj.filter((_, i) => i % 5 === 0 || i === proj.length - 1).map(p => [p.year, money(p.investable), money(p.target)]))));
+  // FI and retirement
+  R.append(fiCard(a));
 
   // export
   const pre = el("pre", { class: "export", text: A.export_md });
@@ -392,6 +386,7 @@ function draw() {
     pre, A.assumptions.length ? el("p", { class: "note", text: "Assumptions: " + A.assumptions.join(" ") }) : null));
 
   drawCharts();
+  if (S.refocus) { S.fi.inputs[S.refocus]?.focus(); S.refocus = null; }
 }
 
 export function drawCharts() {
@@ -427,23 +422,102 @@ export function drawCharts() {
         table(["Date", "Net worth", "Investable", "NW index"], hist.map(h => [h.date + (h.current ? " (today)" : ""), money(h.net_worth), money(h.investable), base.net_worth > 0 ? (100 * h.net_worth / base.net_worth).toFixed(1) : "n/a"])));
     }
   }
-  const pHost = S.root.querySelector("#ch-proj");
-  if (pHost) {
-    const proj = a.projection, fiYear = A.ratios.years_to_fi;
-    lineChart(pHost, {
-      xs: proj.map(p => p.year), zero: true, markers: false, xStep: 5,
-      series: [
-        { name: "Projected investable", short: "Projected", color: C("--s1"), values: proj.map(p => p.investable) },
-        { name: "Target", short: "Target", color: C("--ref"), dash: true, values: proj.map(p => p.target) },
-      ],
-      yFmt: moneyShort, yFmtLong: money,
-      xTickFmt: x => x === 0 ? "Now" : "+" + x + " yr",
-      xLabel: x => x === 0 ? "Now" : `Year ${x} (${new Date().getFullYear() + x})`,
-      annotate: fiYear ? (svg, X, Y, { m, H }) => {
-        sv("line", { x1: X(fiYear), x2: X(fiYear), y1: m.t, y2: H - m.b, stroke: css("--text-3"), "stroke-width": 1, "stroke-dasharray": "2 3" }, svg);
-        sv("text", { x: X(fiYear) - 4, y: m.t + 10, "text-anchor": "end" }, svg).textContent = `Target in ~${fiYear} yr`;
-      } : null,
+  drawProjection();
+}
+
+// ---------------------------------------------------------------- FI and retirement (live sliders)
+// Dragging previews with fiPlan() in place; releasing saves just that setting through the app's handler, which
+// re-renders everything (focus is restored to the slider). Rates show as percents and are stored as fractions.
+const pctT = v => `${+(v * 100).toFixed(2)}%`;
+const FI_SLIDERS = [
+  { key: "withdrawal_rate", label: "Withdrawal rate", scale: 100, step: 0.25, fmt: v => `${pctT(v)} · target ${+(1 / v).toFixed(1)}× spending` },
+  { key: "real_return", label: "Return after inflation", scale: 100, step: 0.5, fmt: v => `${pctT(v)} a year` },
+  { key: "retire_in_years", label: "Stop working in", scale: 1, step: 1,
+    fmt: (v, p, age) => (v === 0 ? "now" : `${v} year${v === 1 ? "" : "s"}`) + (age ? ` (age ${age + v})` : "") +
+      (p.input?.retire_in_years != null ? "" : p.years_to_fi != null ? " · when target is reached" : age ? " · default: 65" : " · default") },
+  { key: "retirement_tax_rate", label: "Tax on 401(k)/IRA withdrawals", scale: 100, step: 1, fmt: v => pctT(v) },
+];
+let fiHandler = null;
+/** The app passes fn({key: value}) to save one setting, fn(null) to reset all to defaults. */
+export function setFiHandler(fn) { fiHandler = fn; }
+const sliderVal = sl => Math.round(Number(S.fi.inputs[sl.key].value) / sl.scale * 1e6) / 1e6;
+
+function fiCard(a) {
+  const F = S.fi = { inputs: {}, outs: {} };
+  const rows = FI_SLIDERS.map(sl => {
+    const [lo, hi] = FI_RANGES[sl.key], id = "fi-" + sl.key;
+    const input = F.inputs[sl.key] = el("input", { type: "range", id, min: lo * sl.scale, max: hi * sl.scale, step: sl.step });
+    input.addEventListener("input", () => previewFi(sl));
+    input.addEventListener("change", () => {
+      if (document.activeElement === input) S.refocus = sl.key;
+      fiHandler?.({ [sl.key]: sliderVal(sl) });
     });
+    F.outs[sl.key] = el("output", { for: id });
+    return el("div", { class: "fi-row" }, el("label", { for: id, text: sl.label }), input, F.outs[sl.key]);
+  });
+  F.sub = el("p", { class: "sub" });
+  F.summary = el("div", { class: "fi-summary", "aria-live": "polite" });
+  F.table = el("div");
+  fillFi(a.fi_plan);
+  return el("div", { class: "card" },
+    el("div", { class: "cardhead" }, el("div", {}, el("h2", { text: "Financial independence and retirement" }), F.sub),
+      el("button", { class: "btn small", type: "button", text: "Reset", title: "4% withdrawals, 5% return, 10% tax, stop working at the target",
+        onclick: () => fiHandler?.(null) })),
+    el("div", { class: "fi-controls" }, ...rows), F.summary,
+    legend([{ name: "Investable assets", kind: "line", color: css("--s1") }, { name: "Target", kind: "dash" }]),
+    el("div", { class: "chart", id: "ch-proj" }), F.table);
+}
+
+function previewFi(sl) {
+  const a = S.analysis.amounts;
+  S.fiPlan = fiPlan(a.fi_base, { ...a.fi_plan.input, [sl.key]: sliderVal(sl) });
+  fillFi(S.fiPlan, sl.key);
+  drawProjection();
+}
+
+function fillFi(plan, activeKey) {
+  const F = S.fi, a = S.analysis.amounts, age = a.fi_base.age, s = plan.settings, at = plan.at_retirement, ri = s.retire_in_years;
+  for (const sl of FI_SLIDERS) {
+    if (sl.key !== activeKey) F.inputs[sl.key].value = +(s[sl.key] * sl.scale).toFixed(4);
+    F.outs[sl.key].textContent = sl.fmt(s[sl.key], plan, age);
   }
+  const yrs = plan.years_to_fi;
+  F.sub.textContent = `Investable assets grow ${pctT(s.real_return)} a year after inflation, plus ${money(a.annual_investment_contributions)} / year of contributions ` +
+    `until you stop working; after that, ${pctT(s.withdrawal_rate)} of the balance is withdrawn each year. Target: ${+(1 / s.withdrawal_rate).toFixed(1)}× annual spending (${money(plan.target)}). ` +
+    (yrs == null ? "Not reached within 80 years at current contributions." : yrs === 0 ? "Target already reached." : `Reached in about ${yrs} years if you keep contributing.`);
+  const when = (ri === 0 ? "If you stop working now" : `If you stop working in ${ri} years`) + (age ? ` (age ${age + ri})` : "");
+  F.summary.replaceChildren(
+    el("div", { class: "lab", text: `${when}, in today's dollars:` }),
+    el("div", { class: "big", text: `≈ ${money(at.monthly_after_tax)} / month take-home` }),
+    el("div", { class: "line", text: `${money(at.monthly_before_tax)} / month before tax, withdrawn from ${money(at.balance)} invested` +
+      (at.share_of_spending != null ? ` · ${pct(at.share_of_spending)} of today's spending (${money(a.spending_monthly)} / month)` : "") }),
+    el("div", { class: "line", text: at.lasts_years == null ? "At this withdrawal the money lasts 30+ years."
+      : `At this withdrawal the money runs out after ${at.lasts_years} years` + (age ? ` (age ${age + ri + at.lasts_years}).` : ".") }),
+    el("p", { class: "note", text: `Only withdrawals from 401(k), 403(b), and traditional IRAs (${pct(a.fi_base.tax_deferred_share)} of your investments today) are taxed, at the rate above. ` +
+      "Roth and HSA withdrawals are tax-free; brokerage gains tax, Social Security, and pensions aren't included. Cash accounts and the home aren't counted." }));
+  const proj = plan.projection, last = proj.length - 1;
+  F.table.replaceChildren(table(["Year", "Investable", "Target", "Withdrawal / month"],
+    proj.filter(p => p.year % 5 === 0 || p.year === ri || p.year === last).map(p => [p.year + (p.year === ri ? " (stop working)" : ""),
+      money(p.investable), money(p.target), p.year < ri ? "" : money(p.investable > 0 ? at.monthly_before_tax : 0)])));
+}
+
+function drawProjection() {
+  const host = S.root?.querySelector("#ch-proj"), plan = S.fiPlan ?? S.analysis?.amounts.fi_plan;
+  if (!host || !plan) return;
+  const proj = plan.projection, ri = plan.settings.retire_in_years, age = S.analysis.amounts.fi_base.age, y0 = new Date().getFullYear();
+  lineChart(host, {
+    xs: proj.map(p => p.year), zero: true, markers: false, xStep: 5,
+    series: [
+      { name: "Investable assets", short: "Investable", color: css("--s1"), values: proj.map(p => p.investable) },
+      { name: "Target", short: "Target", color: css("--ref"), dash: true, values: proj.map(p => p.target) },
+    ],
+    yFmt: moneyShort, yFmtLong: money,
+    xTickFmt: x => x === 0 ? "Now" : "+" + x + " yr",
+    xLabel: x => (x === 0 ? "Now" : `Year ${x} (${y0 + x}${age ? `, age ${age + x}` : ""})`) + (x >= ri ? " · not working" : ""),
+    annotate: (svg, X, Y, { m, H }) => {
+      sv("line", { x1: X(ri), x2: X(ri), y1: m.t, y2: H - m.b, stroke: css("--text-3"), "stroke-width": 1, "stroke-dasharray": "2 3" }, svg);
+      sv("text", { x: X(ri) + (ri === 0 ? 4 : -4), y: m.t + 10, "text-anchor": ri === 0 ? "start" : "end" }, svg).textContent = "Stop working";
+    },
+  });
 }
 

@@ -3,7 +3,7 @@
 // defined here, which is what the CSP build requires (no eval).
 import Alpine from "./vendor/alpine-csp.esm.min.js";
 import { normalize, analyze, exportMarkdown, todayISO, addMonths, BIWEEKLY_TO_MONTHLY, matchPct, fullMatchAt } from "./finhealth.js";
-import { renderResults, drawCharts } from "./charts.js";
+import { renderResults, drawCharts, setFiHandler } from "./charts.js";
 import { detectStore } from "./store.js";
 
 let nextId = 1;
@@ -12,7 +12,7 @@ const LISTS = ["expenses", "debts", "accounts", "history"];
 /** Shape data for editing: every section present, every list row tagged with a stable _id for x-for keys. */
 function forEditing(d) {
   const out = { ...d };
-  for (const s of ["income", "retirement", "profile"]) out[s] = { ...(d[s] ?? {}) };
+  for (const s of ["income", "retirement", "profile", "fi"]) out[s] = { ...(d[s] ?? {}) };
   for (const l of LISTS) out[l] = (d[l] ?? []).map(r => ({ ...r, _id: nextId++ }));
   for (const a of out.accounts) if (a.allocation) a.allocation = { ...a.allocation };
   if (out.retirement.match_tiers) out.retirement.match_tiers = out.retirement.match_tiers.map(t => ({ ...t, _id: nextId++ }));
@@ -22,7 +22,7 @@ function forEditing(d) {
 }
 /** Strip editor-only keys (leading underscore) and proxies. */
 const plain = d => JSON.parse(JSON.stringify(d, (k, v) => (k.startsWith("_") ? undefined : v)));
-const blank = () => ({ income: {}, retirement: {}, profile: {}, expenses: [], debts: [], accounts: [], history: [] });
+const blank = () => ({ income: {}, retirement: {}, profile: {}, fi: {}, expenses: [], debts: [], accounts: [], history: [] });
 const money = v => (v < 0 ? "−" : "") + Math.abs(Math.round(v)).toLocaleString();
 const pctText = v => +(v * 100).toFixed(2) + "%";
 
@@ -122,6 +122,8 @@ Alpine.data("app", () => ({
     }
     this.loading = false;
     this.$watch("data", () => this.changed());
+    // FI sliders live in the results view (plain DOM); they save here, which marks the data unsaved and recomputes
+    setFiHandler(patch => { if (patch) Object.assign(this.data.fi, patch); else this.data.fi = {}; });
     let lastW = 0, rz;
     new ResizeObserver(([e]) => {
       const w = Math.round(e.contentRect.width);

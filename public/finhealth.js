@@ -11,8 +11,9 @@ export const ACCOUNT_TYPES = Object.keys(TAX_BUCKET);
 export const CASH_LIKE = ["cash", "hysa", "cd"];
 export const ALLOC_KEYS = ["stocks", "bonds", "cash", "single_stock", "other"];
 export const HIGH_INTEREST_APR = 0.08;
-export const FI_MULTIPLE = 25;              // 4% withdrawal rule of thumb
-export const ASSUMED_REAL_RETURN = 0.05;
+// financial independence settings (data.fi); the 4% rule means a target of 25x annual spending
+export const FI_DEFAULTS = { withdrawal_rate: 0.04, real_return: 0.05, retirement_tax_rate: 0.10 };
+export const FI_RANGES = { withdrawal_rate: [0.025, 0.06], real_return: [0, 0.10], retire_in_years: [0, 50], retirement_tax_rate: [0, 0.40] };
 export const CD_PENALTY_FREE_DAYS = 90;     // a CD maturing this soon counts in full toward the emergency fund
 export const CD_DEFAULT_PENALTY_MONTHS = 3; // early-withdrawal penalty, in months of interest, when not given
 export const BIWEEKLY_TO_MONTHLY = 26 / 12;  // 26 paychecks a year; two months get a third one
@@ -71,7 +72,7 @@ export function normalize(input) {
   // retirement.match_tiers (optional): [{rate, pct}] = "rate match on the next pct of pay"; replaces the single rate + limit
   const tiers = d.retirement?.match_tiers;
   if (d.retirement) delete d.retirement.match_tiers;
-  for (const sec of ["income", "retirement", "savings", "profile", "home"]) {
+  for (const sec of ["income", "retirement", "savings", "profile", "home", "fi"]) {
     if (d[sec] == null) continue;
     for (const k of Object.keys(d[sec])) d[sec][k] = num(d[sec][k], `${sec}.${k}`);
   }
@@ -86,6 +87,13 @@ export function normalize(input) {
         throw new Error(`match tier ${i + 1}: rate and pct are fractions, e.g. rate 0.5 and pct 0.04 for "50% of the next 4%"`);
       return { rate, pct };
     }).filter(t => t.pct > 0);
+  }
+  if (d.fi) {
+    for (const [k, [lo, hi]] of Object.entries(FI_RANGES))
+      if (k in d.fi && !(d.fi[k] >= lo && d.fi[k] <= hi))
+        throw new Error(`fi.${k} must be between ${lo} and ${hi}` + (k === "retire_in_years" ? "" : " (a fraction, e.g. 0.04 for 4%)"));
+    if ("retire_in_years" in d.fi) d.fi.retire_in_years = Math.round(d.fi.retire_in_years);
+    if (!Object.keys(d.fi).length) delete d.fi;
   }
   if (d.home && !((d.home.mortgage_apr ?? 0) >= 0 && (d.home.mortgage_apr ?? 0) < 1))
     throw new Error("home: mortgage_apr should be a fraction, e.g. 0.065 for 6.5%");
@@ -153,6 +161,7 @@ export function normalize(input) {
 const ratio = (n, dnm) => (dnm ? n / dnm : null);
 const sum = xs => xs.reduce((s, v) => s + v, 0);
 const fmtPct = (v, d = 0) => `${(v * 100).toFixed(d)}%`;
+const pctTxt = v => `${+(v * 100).toFixed(2)}%`; // 4.25%, 4%, no trailing zeros
 
 const matchTiers = ret => ret.match_tiers ?? [{ rate: ret.employer_match_rate ?? 0, pct: ret.employer_match_limit_pct ?? 0 }];
 
@@ -172,6 +181,43 @@ export function fullMatchAt(ret) {
 
 /** Monthly value of an income field entered per month (<base>_monthly) or per biweekly paycheck (<base>_biweekly). */
 const perMonth = (inc, base) => `${base}_biweekly` in inc ? inc[`${base}_biweekly`] * BIWEEKLY_TO_MONTHLY : inc[`${base}_monthly`] ?? 0;
+
+/**
+ * Financial-independence plan in today's dollars (the return is after inflation). Contributions continue until
+ * retire_in_years ("stop working": no more job income), then the same real amount, withdrawal_rate of the balance at
+ * that point, is withdrawn at the start of every year. Target = annual spending / withdrawal_rate.
+ * base: {investable, annual_contrib, annual_spend, tax_deferred_share, age}; settings: data.fi (any subset).
+ * Only tax-deferred withdrawals are taxed, at retirement_tax_rate; Roth/HSA are tax-free, brokerage gains are not modeled.
+ */
+export function fiPlan(base, settings = {}) {
+  const s = { ...FI_DEFAULTS, ...settings }, wr = s.withdrawal_rate, r = s.real_return;
+  const target = base.annual_spend / wr;
+  let yearsToFi = null;
+  if (target && base.investable >= target) yearsToFi = 0;
+  else if (target && base.annual_contrib > 0) {
+    let bal = base.investable, y = 0;
+    while (bal < target && y < 80) { bal = bal * (1 + r) + base.annual_contrib; y++; }
+    yearsToFi = bal >= target ? y : null;
+  }
+  // default: stop working when the target is reached, else at 65, else in 30 years
+  const [lo, hi] = FI_RANGES.retire_in_years;
+  const retireIn = Math.min(hi, Math.max(lo, s.retire_in_years ?? yearsToFi ?? (base.age ? 65 - base.age : 30)));
+  const projection = [];
+  let bal = base.investable, start = 0, lasts = null;
+  for (let y = 0; y <= retireIn + 30; y++) {
+    if (y === retireIn) start = bal;
+    projection.push({ year: y, investable: Math.round(bal), target: Math.round(target) });
+    if (y < retireIn) bal = bal * (1 + r) + Math.max(base.annual_contrib, 0);
+    else if (bal >= start * wr) bal = (bal - start * wr) * (1 + r);
+    else { lasts ??= y - retireIn; bal = 0; } // can't fund a full year's withdrawal
+  }
+  const monthly = start * wr / 12, afterTax = monthly * (1 - base.tax_deferred_share * s.retirement_tax_rate);
+  return {
+    input: settings, settings: { ...s, retire_in_years: retireIn }, target, years_to_fi: yearsToFi, projection,
+    at_retirement: { balance: start, monthly_before_tax: monthly, monthly_after_tax: afterTax,
+      share_of_spending: base.annual_spend ? afterTax * 12 / base.annual_spend : null, lasts_years: lasts }, // lasts null = 30+ years
+  };
+}
 
 export function payoffMonths(balance, apr, payment) {
   if (balance <= 0) return 0;
@@ -269,27 +315,17 @@ export function analyze(d, today = todayISO()) {
   const dti = ratio(debtPay, grossM);
   const fullMatch = matchPct(ret, Infinity), fullAt = fullMatchAt(ret);
   const matchCaptured = fullMatch ? matchPct(ret, empPct) / fullMatch : null;
-  const fiProgress = ratio(investable, burn * 12 * FI_MULTIPLE);
   const hiDebts = debts.filter(x => x.apr >= HIGH_INTEREST_APR);
   const hiDebtRatio = ratio(sum(hiDebts.map(x => x.balance)), grossM * 12);
   const stockPct = ratio((alloc.stocks ?? 0) + (alloc.single_stock ?? 0), investable);
   const singlePct = ratio(alloc.single_stock ?? 0, investable);
 
-  // years to FI at an assumed real return, from current investable + annual contributions
+  // financial independence: invested contributions (not cash savings) until you stop working, then withdrawals
   const annualContrib = (savedFromPay - (sv ? sv.monthly_to_cash ?? 0 : 0) + employee401k + employer401k) * 12;
-  const target = burn * 12 * FI_MULTIPLE;
-  let yearsToFi = null;
-  if (target && investable < target && annualContrib > 0) {
-    let bal = investable, y = 0;
-    while (bal < target && y < 80) { bal = bal * (1 + ASSUMED_REAL_RETURN) + annualContrib; y++; }
-    yearsToFi = bal >= target ? y : null;
-  } else if (target && investable >= target) yearsToFi = 0;
-  const horizon = Math.min(Math.max((yearsToFi ?? 0) + 5, 15), 45);
-  const projection = [];
-  for (let y = 0, bal = investable; y <= horizon; y++) {
-    projection.push({ year: y, investable: Math.round(bal), target: Math.round(target) });
-    bal = bal * (1 + ASSUMED_REAL_RETURN) + Math.max(annualContrib, 0);
-  }
+  const fiBase = { investable, annual_contrib: annualContrib, annual_spend: burn * 12,
+    tax_deferred_share: investable > 0 ? buckets.tax_deferred / investable : 0, age: d.profile?.age ?? null };
+  const plan = fiPlan(fiBase, d.fi);
+  const yearsToFi = plan.years_to_fi, fiProgress = ratio(investable, plan.target);
 
   const history = (d.history ?? []).filter(h => h.date < today).sort((p, q) => p.date.localeCompare(q.date))
     .map(h => ({ date: h.date, net_worth: h.net_worth, investable: h.investable }));
@@ -301,7 +337,8 @@ export function analyze(d, today = todayISO()) {
     debt_balance: debtBal, employee_401k_monthly: employee401k, employer_401k_monthly: employer401k,
     saved_from_pay_monthly: savedFromPay, surplus_monthly: surplus, cash, investable, assets, net_worth: netWorth,
     expenses, buckets, allocation: alloc, liquid_cash: liquid, cd_accessible: cdAccess, emergency_cash: emergencyCash,
-    cds, cash_by_type: cashByType, projection, annual_investment_contributions: annualContrib, history,
+    cds, cash_by_type: cashByType, projection: plan.projection, annual_investment_contributions: annualContrib, history,
+    spending_monthly: burn, fi_base: fiBase, fi_plan: plan,
     home: home ? { value: homeValue, mortgage_balance: mortBal, equity: homeEquity, mortgage_payment: home.mortgage_payment ?? 0,
       costs: home.costs_monthly ?? 0, housing } : null,
   };
@@ -326,6 +363,13 @@ export function analyze(d, today = todayISO()) {
     investable_to_annual_spend: ratio(investable, burn * 12),
     fi_progress: fiProgress,
     years_to_fi: yearsToFi,
+    retirement: {
+      withdrawal_rate: plan.settings.withdrawal_rate, target_multiple_of_annual_spending: 1 / plan.settings.withdrawal_rate,
+      real_return: plan.settings.real_return, retirement_tax_rate: plan.settings.retirement_tax_rate,
+      stop_working_in_years: plan.settings.retire_in_years, tax_deferred_share_of_investable: fiBase.tax_deferred_share,
+      after_tax_withdrawal_share_of_current_spending: plan.at_retirement.share_of_spending,
+      money_lasts_years: plan.at_retirement.lasts_years, // null = 30+ years
+    },
     stock_share: stockPct,
     single_stock_share: singlePct,
     expense_mix: expTotal ? Object.fromEntries(Object.entries(expenses).sort((p, q) => q[1] - p[1]).map(([k, v]) => [k, v / expTotal])) : {},
@@ -404,7 +448,8 @@ export function analyze(d, today = todayISO()) {
     C("cash_yield", "Cash yield (blended APR)", "info", cashBlendedApr, "%",
       `Rate across checking, savings, and CDs. ${fmtPct(cashZeroRateShare)} of cash has no stated rate.`);
   if (fiProgress !== null) C("fi_progress", "Financial independence progress", "info", fiProgress, "%",
-    `Investable assets vs ${FI_MULTIPLE}x annual spending. Years to reach at ${fmtPct(ASSUMED_REAL_RETURN)} real return and current contributions: ${yearsToFi ?? "n/a"}.`);
+    `Investable assets vs ${+(1 / plan.settings.withdrawal_rate).toFixed(1)}x annual spending (${pctTxt(plan.settings.withdrawal_rate)} withdrawal rate). ` +
+    `Years to reach at ${pctTxt(plan.settings.real_return)} real return and current contributions: ${yearsToFi ?? "n/a"}.`);
 
   return { amounts, ratios, checks, growth: growth(history), assumptions };
 }
@@ -500,6 +545,13 @@ export function exportMarkdown(A) {
       `- home equity share of net worth: ${fmtValue(h.equity_share_of_net_worth, "%")}`,
       `- mortgage payoff at current payment: ${m === null ? "never (payment below interest)" : m === 0 ? "no mortgage" : `${(m / 12).toFixed(1)} years`}`);
   }
+  const rp = r.retirement;
+  L.push("", "## Retirement plan (today's dollars, user-set assumptions)", "",
+    `- withdrawal rate ${pctTxt(rp.withdrawal_rate)} (target ${+rp.target_multiple_of_annual_spending.toFixed(1)}x annual spending); return ${pctTxt(rp.real_return)} a year after inflation`,
+    `- years to target if contributions continue: ${r.years_to_fi ?? "not reached"}`,
+    `- stops working (no job income) in ${rp.stop_working_in_years} years; after-tax withdrawals then cover ${fmtValue(rp.after_tax_withdrawal_share_of_current_spending, "%")} of current spending`,
+    `- ${pctTxt(rp.tax_deferred_share_of_investable)} of investable assets are tax-deferred, taxed at an assumed ${pctTxt(rp.retirement_tax_rate)} on withdrawal; Social Security and pensions not included`,
+    `- money lasts: ${rp.money_lasts_years === null ? "30+ years" : `${rp.money_lasts_years} years`} at that withdrawal`);
   if (Object.keys(r.cash_mix).length) {
     L.push("", "## Cash and CDs", "",
       "- cash by account type: " + Object.entries(r.cash_mix).map(([k, v]) => `${k} ${fmtPct(v)}`).join(", "),

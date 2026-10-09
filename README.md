@@ -68,6 +68,8 @@ JSON. See `public/example.json`.
   "savings":    { "monthly_to_investments": 800, "monthly_to_cash": 300 },  // optional
   "home":       { "value": 420000, "mortgage_balance": 310000, "mortgage_apr": 0.0625,  // optional
                   "mortgage_payment": 1910, "costs_monthly": 520 },
+  "fi":         { "withdrawal_rate": 0.04, "real_return": 0.05, "retire_in_years": 20,  // optional; set by the sliders
+                  "retirement_tax_rate": 0.10 },
   "expenses":   [{ "name": "housing", "amount": 2100 }],
   "debts":      [{ "name": "credit card", "balance": 2300, "apr": 0.2399, "min_payment": 75 }],
   "accounts":   [
@@ -84,6 +86,8 @@ JSON. See `public/example.json`.
 Rates and percentages are fractions (`0.045` = 4.5%); the web form shows them as percents. Take-home pay is either `take_home_monthly` or `take_home_biweekly` (one paycheck), not both; biweekly is averaged to monthly as × 26 ÷ 12, so months with a third paycheck are spread across the year. Optional `other_deductions_monthly` / `other_deductions_biweekly` (health premiums, HSA/FSA, anything withheld besides taxes and 401k) works the same way. Taxes withheld are estimated as gross − your 401k − other deductions − take-home, so `gross_annual` should be before deductions and should include a bonus only if take-home does. Account types: `cash`, `hysa`, `cd`, `brokerage`, `401k`, `403b`, `traditional_ira`, `roth_ira`, `roth_401k`, `hsa`. Investment accounts take an `allocation` (`stocks`, `bonds`, `cash`, `single_stock`, `other`) summing to 1.
 
 Home (optional): `mortgage_payment` is principal and interest only; `costs_monthly` is property tax, insurance, PMI, and HOA. Leave the mortgage and those costs out of `expenses` and `debts`. With a home, net worth includes equity (value − mortgage balance), and housing (payment + costs) is its own monthly outflow in cash flow, the emergency fund, and the FI target. Investable assets and FI progress exclude the home. Without it, rent goes under `expenses`.
+
+Financial independence (`fi`, set with the sliders on the results page; all optional): the target is annual spending ÷ `withdrawal_rate` (4% = 25×). Investable assets grow at `real_return` (after inflation, so everything is in today's dollars) plus invested contributions until `retire_in_years`, when job income stops; from then on, `withdrawal_rate` of that balance is withdrawn each year. Without `retire_in_years`, you stop working when the target is reached (else at 65 if age is set, else in 30 years). Take-home after you stop working taxes only withdrawals from tax-deferred accounts, at `retirement_tax_rate`, using today's account mix; Roth and HSA are tax-free, and brokerage gains tax, Social Security, and pensions aren't modeled.
 
 CDs: `renews: true` models a ladder rung. Once `maturity_date` passes, the next maturity rolls forward by `term_months`. For the emergency fund, a CD maturing within 90 days counts in full; later ones count net of `penalty_months` of interest. A non-renewing CD past maturity raises a "watch" check.
 
@@ -105,7 +109,7 @@ CDs: `renews: true` models a ladder rung. Once `maturity_date` passes, the next 
 | Allocation vs age | stock share vs (110 − age) | >15 pt gap = watch |
 | CDs | days to next maturity; lapsed non-renewing CDs | lapsed = watch |
 | Cash yield | balance-weighted APR across cash accounts | info |
-| FI progress | investable / (25 × annual spending); years to reach at 5% real return | info |
+| FI progress | investable / (annual spending ÷ withdrawal rate); years to reach at the set real return (defaults 4%, 5%) | info |
 
 ## Running on a server (e.g. a dev VM)
 

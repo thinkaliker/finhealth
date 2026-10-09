@@ -177,6 +177,19 @@ th { color: var(--text-3); font-weight: 500; }
 pre.export { white-space: pre-wrap; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 12px;
   font-size: 12px; max-height: 420px; overflow: auto; margin: 8px 0 0; }
 .empty { color: var(--text-3); font-size: 13px; padding: 24px 0; text-align: center; }
+.fi-controls { margin: 4px 0 10px; }
+.fi-row { display: grid; grid-template-columns: 190px 1fr minmax(170px, auto); gap: 4px 12px; align-items: center; font-size: 12px; margin: 4px 0; }
+.fi-row label { color: var(--text-2); }
+.fi-row input[type="range"] { width: 100%; margin: 0; accent-color: var(--accent); }
+.fi-row output { font-variant-numeric: tabular-nums; }
+@media (max-width: 640px) {
+  .fi-row { grid-template-columns: 1fr auto; }
+  .fi-row input[type="range"] { order: 3; grid-column: 1 / -1; }
+}
+.fi-summary { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; }
+.fi-summary .lab, .fi-summary .line { font-size: 12px; color: var(--text-2); }
+.fi-summary .big { font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; margin: 2px 0; }
+.fi-summary .note { margin-top: 6px; }
 /* ---------- app shell additions ---------- */
 [x-cloak] { display: none !important; }
 .toolbar { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }

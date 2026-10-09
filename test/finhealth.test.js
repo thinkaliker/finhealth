@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { normalize, analyze, exportJSON, exportMarkdown, payoffMonths, cdNextMaturity, addMonths, parseDate, matchPct, fullMatchAt } from "../public/finhealth.js";
+import { normalize, analyze, exportJSON, exportMarkdown, payoffMonths, cdNextMaturity, addMonths, parseDate, matchPct, fullMatchAt, fiPlan } from "../public/finhealth.js";
 
 const EXAMPLE = JSON.parse(fs.readFileSync(new URL("../public/example.json", import.meta.url)));
 const TODAY = "2026-10-08";
@@ -144,6 +144,48 @@ test("tiered employer match: 100% of the first 4%, 50% of the next 4%, plus a fl
   const d = normalize({ retirement: { match_tiers: [{ rate: "1", pct: "0.04" }, { rate: null, pct: null }] } });
   assert.deepEqual(d.retirement.match_tiers, [{ rate: 1, pct: 0.04 }]);
   assert.deepEqual(normalize(JSON.parse(JSON.stringify(d))), d);
+});
+
+test("FI plan: adjustable withdrawal rate and return; take-home after you stop working", () => {
+  const base = { investable: 1_000_000, annual_contrib: 0, annual_spend: 40_000, tax_deferred_share: 0.5, age: 40 };
+  const now = fiPlan(base, { retire_in_years: 0 });
+  close(now.target, 1_000_000);
+  assert.equal(now.years_to_fi, 0);
+  close(now.at_retirement.monthly_before_tax, 40_000 / 12);
+  close(now.at_retirement.monthly_after_tax, 40_000 / 12 * (1 - 0.5 * 0.10)); // only the tax-deferred half is taxed
+  close(now.at_retirement.share_of_spending, 0.95);
+  assert.equal(now.at_retirement.lasts_years, null); // 4% at 5% real lasts the whole 30 years
+  assert.equal(now.projection.length, 31);
+  // 6% a year at 0% return: 16 full withdrawals of 60k from 1M
+  assert.equal(fiPlan(base, { retire_in_years: 0, withdrawal_rate: 0.06, real_return: 0 }).at_retirement.lasts_years, 16);
+  close(fiPlan(base, { withdrawal_rate: 0.035 }).target, 40_000 / 0.035);
+
+  // contributions stop when you stop working; retirement defaults to the year the target is reached
+  const grow = { ...base, investable: 100_000, annual_contrib: 30_000 };
+  const auto = fiPlan(grow, {});
+  assert.ok(auto.years_to_fi > 0 && auto.settings.retire_in_years === auto.years_to_fi);
+  const early = fiPlan(grow, { retire_in_years: 5 }), p = early.projection, start = early.at_retirement.balance;
+  assert.equal(p[5].investable, Math.round(start));
+  assert.ok(Math.abs(p[6].investable - start * 0.96 * 1.05) <= 1, "year after: 4% withdrawn, then 5% growth, no contribution");
+  assert.ok(fiPlan(grow, { withdrawal_rate: 0.03 }).years_to_fi > auto.years_to_fi);
+  assert.equal(fiPlan({ ...grow, annual_contrib: 0 }, {}).settings.retire_in_years, 25); // not reached: stop at 65
+
+  // example data with defaults: 25x spending, same contributions as before
+  const ap = A.amounts.fi_plan;
+  close(ap.target, (4350 + 485) * 12 * 25);
+  close(A.ratios.fi_progress, A.amounts.investable / ap.target);
+  assert.equal(A.ratios.retirement.stop_working_in_years, A.ratios.years_to_fi);
+  assert.match(exportMarkdown(A), /## Retirement plan[\s\S]*withdrawal rate 4% \(target 25x annual spending\)/);
+
+  // settings are validated, saved files round-trip, and the export stays amount-free with custom settings
+  assert.throws(() => normalize({ fi: { withdrawal_rate: 4 } }), /fi.withdrawal_rate/);
+  assert.equal(normalize({ fi: {} }).fi, undefined);
+  const input = { ...EXAMPLE, fi: { withdrawal_rate: 0.035, real_return: 0.04, retire_in_years: 12.4, retirement_tax_rate: 0.15 } };
+  const d = normalize(input), C = analyze(d, TODAY);
+  assert.equal(d.fi.retire_in_years, 12);
+  assert.deepEqual(normalize(JSON.parse(JSON.stringify(d))), d);
+  assert.equal(C.ratios.retirement.stop_working_in_years, 12);
+  assertNoLeaks(input, C);
 });
 
 test("home: housing is its own cash-flow line, equity counts in net worth, housing ratios checked", () => {
