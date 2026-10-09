@@ -83,15 +83,35 @@
         <div class="field"><label for="f-emp">Your 401k contribution</label>
           <div class="num pct"><input id="f-emp" type="number" step="any" inputmode="decimal" :value="pctVal(data.retirement, 'employee_contribution_pct')" @input="setPct(data.retirement, 'employee_contribution_pct', $event)"></div>
           <div class="hint">Percent of gross salary.</div></div>
-        <div class="field"><label for="f-mr">Employer match rate</label>
-          <div class="num pct"><input id="f-mr" type="number" step="any" inputmode="decimal" :value="pctVal(data.retirement, 'employer_match_rate')" @input="setPct(data.retirement, 'employer_match_rate', $event)"></div>
-          <div class="hint">50 means 50¢ per $1 you contribute.</div></div>
-        <div class="field"><label for="f-ml">Match applies up to</label>
-          <div class="num pct"><input id="f-ml" type="number" step="any" inputmode="decimal" :value="pctVal(data.retirement, 'employer_match_limit_pct')" @input="setPct(data.retirement, 'employer_match_limit_pct', $event)"></div>
-          <div class="hint">Percent of salary the match covers.</div></div>
+        <label class="toggle"><input type="checkbox" :checked="hasTiers()" @change="toggleTiers($event)"> Match has tiers (e.g. 100% on the first 4%, then 50% on the next 4%)</label>
+        <template x-if="isSimpleMatch()">
+          <div>
+            <div class="field"><label for="f-mr">Employer match rate</label>
+              <div class="num pct"><input id="f-mr" type="number" step="any" inputmode="decimal" :value="pctVal(data.retirement, 'employer_match_rate')" @input="setPct(data.retirement, 'employer_match_rate', $event)"></div>
+              <div class="hint">50 means 50¢ per $1 you contribute.</div></div>
+            <div class="field"><label for="f-ml">Match applies up to</label>
+              <div class="num pct"><input id="f-ml" type="number" step="any" inputmode="decimal" :value="pctVal(data.retirement, 'employer_match_limit_pct')" @input="setPct(data.retirement, 'employer_match_limit_pct', $event)"></div>
+              <div class="hint">Percent of salary the match covers.</div></div>
+          </div>
+        </template>
+        <template x-if="hasTiers()">
+          <div>
+            <template x-for="(t, i) in data.retirement.match_tiers" :key="rowKey(t)">
+              <div class="row tier">
+                <div class="num pct"><input type="number" step="any" min="0" inputmode="decimal" aria-label="Match rate" :value="pctVal(t, 'rate')" @input="setPct(t, 'rate', $event)"></div>
+                <span x-text="tierText(i)"></span>
+                <div class="num pct"><input type="number" step="any" min="0" inputmode="decimal" aria-label="Of this share of salary" :value="pctVal(t, 'pct')" @input="setPct(t, 'pct', $event)"></div>
+                <span>of salary</span>
+                <button class="btn icon" type="button" aria-label="Remove tier" title="Remove" @click="removeTier(i)">✕</button>
+              </div>
+            </template>
+            <div class="addrow"><button class="btn small" type="button" @click="addTier()">+ Tier</button></div>
+          </div>
+        </template>
         <div class="field"><label for="f-ne">Fixed employer contribution</label>
           <div class="num pct"><input id="f-ne" type="number" step="any" inputmode="decimal" :value="pctVal(data.retirement, 'employer_nonelective_pct')" @input="setPct(data.retirement, 'employer_nonelective_pct', $event)"></div>
           <div class="hint">Paid regardless of your contribution.</div></div>
+        <div class="note" x-show="sum('match')" x-text="sum('match')"></div>
       </div>
     </details>
 

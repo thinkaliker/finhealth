@@ -68,9 +68,24 @@ function num(v, where) {
 export function normalize(input) {
   const d = JSON.parse(JSON.stringify(input ?? {}));
   if (typeof d !== "object" || Array.isArray(d)) throw new Error("data must be a JSON object");
+  // retirement.match_tiers (optional): [{rate, pct}] = "rate match on the next pct of pay"; replaces the single rate + limit
+  const tiers = d.retirement?.match_tiers;
+  if (d.retirement) delete d.retirement.match_tiers;
   for (const sec of ["income", "retirement", "savings", "profile", "home"]) {
     if (d[sec] == null) continue;
     for (const k of Object.keys(d[sec])) d[sec][k] = num(d[sec][k], `${sec}.${k}`);
+  }
+  if (tiers != null) {
+    const r = d.retirement;
+    if (!Array.isArray(tiers)) throw new Error("retirement.match_tiers must be a list");
+    if (r.employer_match_rate || r.employer_match_limit_pct) throw new Error("retirement: give employer_match_rate and employer_match_limit_pct, or match_tiers, not both");
+    delete r.employer_match_rate; delete r.employer_match_limit_pct;
+    r.match_tiers = tiers.map((t, i) => {
+      const rate = num(t.rate, `match tier ${i + 1} rate`), pct = num(t.pct, `match tier ${i + 1} pct`);
+      if (!(rate >= 0 && rate <= 5 && pct >= 0 && pct < 1))
+        throw new Error(`match tier ${i + 1}: rate and pct are fractions, e.g. rate 0.5 and pct 0.04 for "50% of the next 4%"`);
+      return { rate, pct };
+    }).filter(t => t.pct > 0);
   }
   if (d.home && !((d.home.mortgage_apr ?? 0) >= 0 && (d.home.mortgage_apr ?? 0) < 1))
     throw new Error("home: mortgage_apr should be a fraction, e.g. 0.065 for 6.5%");
@@ -139,6 +154,22 @@ const ratio = (n, dnm) => (dnm ? n / dnm : null);
 const sum = xs => xs.reduce((s, v) => s + v, 0);
 const fmtPct = (v, d = 0) => `${(v * 100).toFixed(d)}%`;
 
+const matchTiers = ret => ret.match_tiers ?? [{ rate: ret.employer_match_rate ?? 0, pct: ret.employer_match_limit_pct ?? 0 }];
+
+/** Employer match as a fraction of pay when the employee contributes `emp` (a fraction; Infinity = the maximum match). */
+export function matchPct(ret, emp) {
+  let from = 0, m = 0;
+  for (const t of matchTiers(ret)) { m += t.rate * Math.max(0, Math.min(emp - from, t.pct)); from += t.pct; }
+  return m;
+}
+
+/** Employee contribution (fraction of pay) that receives the full match. */
+export function fullMatchAt(ret) {
+  let from = 0, at = 0;
+  for (const t of matchTiers(ret)) { from += t.pct; if (t.rate > 0) at = from; }
+  return at;
+}
+
 /** Monthly value of an income field entered per month (<base>_monthly) or per biweekly paycheck (<base>_biweekly). */
 const perMonth = (inc, base) => `${base}_biweekly` in inc ? inc[`${base}_biweekly`] * BIWEEKLY_TO_MONTHLY : inc[`${base}_monthly`] ?? 0;
 
@@ -168,9 +199,9 @@ export function analyze(d, today = todayISO()) {
   const debtBal = sum(debts.map(x => x.balance));
 
   // 401k flows
-  const empPct = ret.employee_contribution_pct ?? 0, limit = ret.employer_match_limit_pct ?? 0;
+  const empPct = ret.employee_contribution_pct ?? 0;
   const employee401k = empPct * grossM;
-  const employer401k = ((ret.employer_match_rate ?? 0) * Math.min(empPct, limit) + (ret.employer_nonelective_pct ?? 0)) * grossM;
+  const employer401k = (matchPct(ret, empPct) + (ret.employer_nonelective_pct ?? 0)) * grossM;
 
   // taxes withheld: what's left of gross pay after take-home, your 401(k), and other paycheck deductions
   const otherDed = perMonth(inc, "other_deductions");
@@ -236,7 +267,8 @@ export function analyze(d, today = todayISO()) {
   const efMonths = burn ? emergencyCash / burn : null;
   const liquidMonths = burn ? liquid / burn : null;
   const dti = ratio(debtPay, grossM);
-  const matchCaptured = limit ? Math.min(empPct, limit) / limit : null;
+  const fullMatch = matchPct(ret, Infinity), fullAt = fullMatchAt(ret);
+  const matchCaptured = fullMatch ? matchPct(ret, empPct) / fullMatch : null;
   const fiProgress = ratio(investable, burn * 12 * FI_MULTIPLE);
   const hiDebts = debts.filter(x => x.apr >= HIGH_INTEREST_APR);
   const hiDebtRatio = ratio(sum(hiDebts.map(x => x.balance)), grossM * 12);
@@ -331,7 +363,8 @@ export function analyze(d, today = todayISO()) {
     `Cash divided by monthly ${outflows}. Common target 3-6 months; more if income is variable.` +
     (cds.length ? ` Includes CDs at early-withdrawal value; checking and savings alone cover ${liquidMonths.toFixed(1)} months.` : ""));
   if (matchCaptured !== null) C("match", "Employer match captured", matchCaptured >= 0.999 ? "ok" : "act", matchCaptured, "%",
-    "Share of available employer match you are contributing enough to receive.");
+    `Share of available employer match you are contributing enough to receive. Contributing ${+(fullAt * 100).toFixed(2)}% of salary gets the full match` +
+    (ret.match_tiers ? ` (tiered: ${ret.match_tiers.map((t, i) => `${+(t.rate * 100).toFixed(2)}% of the ${i ? "next" : "first"} ${+(t.pct * 100).toFixed(2)}%`).join(", then ")}).` : "."));
   if (dti !== null) C("dti", home ? "Debt-to-income, excluding housing" : "Debt-to-income (payments / gross)", dti < 0.15 ? "ok" : dti <= 0.36 ? "watch" : "act", dti, "%",
     "Under 15% comfortable; lenders commonly cap around 36%.");
   if (home) {

@@ -2,7 +2,7 @@
 // results and charts from charts.js. Template expressions only reference properties and methods
 // defined here, which is what the CSP build requires (no eval).
 import Alpine from "./vendor/alpine-csp.esm.min.js";
-import { normalize, analyze, exportMarkdown, todayISO, addMonths, BIWEEKLY_TO_MONTHLY } from "./finhealth.js";
+import { normalize, analyze, exportMarkdown, todayISO, addMonths, BIWEEKLY_TO_MONTHLY, matchPct, fullMatchAt } from "./finhealth.js";
 import { renderResults, drawCharts } from "./charts.js";
 import { detectStore } from "./store.js";
 
@@ -15,6 +15,7 @@ function forEditing(d) {
   for (const s of ["income", "retirement", "profile"]) out[s] = { ...(d[s] ?? {}) };
   for (const l of LISTS) out[l] = (d[l] ?? []).map(r => ({ ...r, _id: nextId++ }));
   for (const a of out.accounts) if (a.allocation) a.allocation = { ...a.allocation };
+  if (out.retirement.match_tiers) out.retirement.match_tiers = out.retirement.match_tiers.map(t => ({ ...t, _id: nextId++ }));
   if (d.savings) out.savings = { ...d.savings };
   if (d.home) out.home = { ...d.home };
   return out;
@@ -23,6 +24,7 @@ function forEditing(d) {
 const plain = d => JSON.parse(JSON.stringify(d, (k, v) => (k.startsWith("_") ? undefined : v)));
 const blank = () => ({ income: {}, retirement: {}, profile: {}, expenses: [], debts: [], accounts: [], history: [] });
 const money = v => (v < 0 ? "−" : "") + Math.abs(Math.round(v)).toLocaleString();
+const pctText = v => +(v * 100).toFixed(2) + "%";
 
 /**
  * Pointer drag from a row's grip. Other rows slide to show the drop slot and the page scrolls near the
@@ -152,8 +154,10 @@ Alpine.data("app", () => ({
     this.error = "";
     A.export_md = exportMarkdown(A);
     this._current = { A, n };
-    const a = A.amounts;
+    const a = A.amounts, ret = n.retirement ?? {}, fullMatch = matchPct(ret, Infinity);
     this.sums = {
+      match: fullMatch ? `Full match: ${pctText(fullMatch)} of pay when you contribute ${pctText(fullMatchAt(ret))}. ` +
+        `At your ${pctText(ret.employee_contribution_pct ?? 0)}, the match is ${pctText(matchPct(ret, ret.employee_contribution_pct ?? 0))}.` : "",
       income: money(a.take_home_monthly) + " / mo" + (a.taxes_monthly > 0 ? " · taxes " + money(a.taxes_monthly) : ""),
       retirement: money(a.employee_401k_monthly + a.employer_401k_monthly) + " / mo",
       savings: n.savings ? money(a.saved_from_pay_monthly) + " / mo" : "assumed: full surplus",
@@ -268,6 +272,23 @@ Alpine.data("app", () => ({
     if (ev.target.checked) this.data.savings = { monthly_to_investments: 0, monthly_to_cash: 0 };
     else delete this.data.savings;
   },
+  // tiered employer match: replaces the single match rate + limit; switching carries the single match into tier 1 and back
+  hasTiers() { return Array.isArray(this.data.retirement.match_tiers); },
+  isSimpleMatch() { return !this.hasTiers(); },
+  toggleTiers(ev) {
+    const r = this.data.retirement;
+    if (ev.target.checked) {
+      r.match_tiers = [{ rate: r.employer_match_rate || null, pct: r.employer_match_limit_pct || null, _id: nextId++ }, { rate: null, pct: null, _id: nextId++ }];
+      delete r.employer_match_rate; delete r.employer_match_limit_pct;
+    } else {
+      const t = r.match_tiers[0];
+      delete r.match_tiers;
+      if (t) Object.assign(r, { employer_match_rate: t.rate, employer_match_limit_pct: t.pct });
+    }
+  },
+  addTier() { this.data.retirement.match_tiers.push({ rate: null, pct: null, _id: nextId++ }); },
+  removeTier(i) { this.data.retirement.match_tiers.splice(i, 1); },
+  tierText(i) { return i === 0 ? "on the first" : "on the next"; },
   hasHome() { return !!this.data.home; },
   toggleHome(ev) {
     if (ev.target.checked) this.data.home = { value: 0, mortgage_balance: 0, mortgage_apr: 0, mortgage_payment: 0, costs_monthly: 0 };

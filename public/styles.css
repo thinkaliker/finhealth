@@ -90,6 +90,8 @@ select.txt { padding: 5px 6px; }
 .sorting > .dragging { transition: none; position: relative; z-index: 2; background: var(--surface); border-radius: 8px; box-shadow: 0 4px 14px rgb(0 0 0 / .2); }
 .sorting > .dragging .grip { cursor: grabbing; }
 .row.hist { grid-template-columns: 130px 1fr 1fr 28px; }
+.row.tier { grid-template-columns: minmax(56px, 76px) auto minmax(56px, 76px) 1fr 28px; }
+.row.tier > span { color: var(--text-2); font-size: 12px; white-space: nowrap; }
 .colhead { display: grid; gap: 6px; font-size: 11px; color: var(--text-3); text-transform: uppercase; letter-spacing: .03em; }
 .acct { border: 1px solid var(--line); border-radius: 8px; padding: 8px; margin: 8px 0; background: var(--bg); }
 .acct .top { display: grid; grid-template-columns: 18px 1fr 130px 28px; gap: 6px; align-items: center; }

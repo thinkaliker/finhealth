@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { normalize, analyze, exportJSON, exportMarkdown, payoffMonths, cdNextMaturity, addMonths, parseDate } from "../public/finhealth.js";
+import { normalize, analyze, exportJSON, exportMarkdown, payoffMonths, cdNextMaturity, addMonths, parseDate, matchPct, fullMatchAt } from "../public/finhealth.js";
 
 const EXAMPLE = JSON.parse(fs.readFileSync(new URL("../public/example.json", import.meta.url)));
 const TODAY = "2026-10-08";
@@ -115,6 +115,35 @@ test("taxes withheld = gross - 401k - other deductions - take-home", () => {
   assert.equal(bad.checks.find(c => c.key === "taxes").status, "watch");
   assert.equal(analyze(normalize({ income: { take_home_monthly: 5000 } }), TODAY).amounts.taxes_monthly, null);
   assert.throws(() => normalize({ income: { other_deductions_monthly: 100, other_deductions_biweekly: 50 } }), /not both/);
+});
+
+test("tiered employer match: 100% of the first 4%, 50% of the next 4%, plus a flat 3%", () => {
+  const ret = { match_tiers: [{ rate: 1, pct: 0.04 }, { rate: 0.5, pct: 0.04 }], employer_nonelective_pct: 0.03 };
+  close(matchPct(ret, 0.03), 0.03);
+  close(matchPct(ret, 0.06), 0.04 + 0.01);
+  close(matchPct(ret, 0.10), 0.06);
+  close(fullMatchAt(ret), 0.08);
+  const grossM = 115000 / 12;
+  const at = emp => analyze(normalize({ ...EXAMPLE, retirement: { ...ret, employee_contribution_pct: emp } }), TODAY);
+  const six = at(0.06);
+  close(six.amounts.employer_401k_monthly, (0.05 + 0.03) * grossM);
+  close(six.ratios.employer_contribution_share_of_gross, 0.08);
+  const mc = six.checks.find(c => c.key === "match");
+  assert.equal(mc.status, "act");
+  close(mc.value, 0.05 / 0.06);
+  assert.match(mc.detail, /Contributing 8% of salary gets the full match \(tiered: 100% of the first 4%, then 50% of the next 4%\)/);
+  assert.equal(at(0.08).checks.find(c => c.key === "match").status, "ok");
+
+  // single rate + limit is the one-tier case; the example (50% up to 6%) is unchanged
+  close(matchPct(EXAMPLE.retirement, 0.06), 0.03);
+  assert.equal(A.checks.find(c => c.key === "match").status, "ok");
+
+  // validation: fractions only, not both forms, blank tiers dropped, round-trips
+  assert.throws(() => normalize({ retirement: { match_tiers: [{ rate: 100, pct: 4 }] } }), /fractions/);
+  assert.throws(() => normalize({ retirement: { employer_match_rate: 0.5, match_tiers: [{ rate: 1, pct: 0.04 }] } }), /not both/);
+  const d = normalize({ retirement: { match_tiers: [{ rate: "1", pct: "0.04" }, { rate: null, pct: null }] } });
+  assert.deepEqual(d.retirement.match_tiers, [{ rate: 1, pct: 0.04 }]);
+  assert.deepEqual(normalize(JSON.parse(JSON.stringify(d))), d);
 });
 
 test("home: housing is its own cash-flow line, equity counts in net worth, housing ratios checked", () => {

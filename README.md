@@ -63,6 +63,8 @@ JSON. See `public/example.json`.
   "income":     { "take_home_monthly": 6200, "gross_annual": 115000 },  // or "take_home_biweekly": 2860 per paycheck
   "retirement": { "employee_contribution_pct": 0.06, "employer_match_rate": 0.5,
                   "employer_match_limit_pct": 0.06, "employer_nonelective_pct": 0 },
+  // tiered match instead of rate + limit: 100% of the first 4%, then 50% of the next 4%
+  // "retirement": { ..., "match_tiers": [{ "rate": 1, "pct": 0.04 }, { "rate": 0.5, "pct": 0.04 }] },
   "savings":    { "monthly_to_investments": 800, "monthly_to_cash": 300 },  // optional
   "home":       { "value": 420000, "mortgage_balance": 310000, "mortgage_apr": 0.0625,  // optional
                   "mortgage_payment": 1910, "costs_monthly": 520 },
@@ -93,7 +95,7 @@ CDs: `renews: true` models a ladder rung. Once `maturity_date` passes, the next 
 | Savings rate | (saved from pay + employee 401k + employer 401k) / (take-home + employee 401k + employer 401k) | <10% act, 10–20% watch |
 | Emergency fund | (checking + HYSA + CDs at accessible value) / (expenses + housing + debt minimums) | <3 mo act, 3–6 watch |
 | Taxes withheld | (gross − employee 401k − other deductions − take-home) / gross | info; negative = watch (inputs don't add up) |
-| Match captured | min(deferral, match limit) / match limit | <100% act |
+| Match captured | match at your deferral / maximum match (single rate + limit, or tiers) | <100% act |
 | Debt-to-income | debt minimums (excluding housing) / gross monthly | >36% act, 15–36% watch |
 | Housing cost (home only) | (mortgage payment + property costs) / gross monthly | >36% act, 28–36% watch |
 | Debt-to-income incl. housing (home only) | (housing + debt minimums) / gross monthly | >43% act, 36–43% watch |
