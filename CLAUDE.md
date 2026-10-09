@@ -5,7 +5,7 @@ Personal-finance health check. The user enters income, 401(k), expenses, debts, 
 ## Layout
 
 - `public/finhealth.js`: all calculations (normalize, analyze, exportMarkdown/exportJSON, CD date logic). Pure functions, no DOM or Node APIs; shared by browser and Node. Change calculations here only.
-- `public/app.js`: Alpine (CSP build) page controller: form state, save/revert/import/export, onboarding.
+- `public/app.js`: Alpine (CSP build) page controller: form state, save/revert/import/export, onboarding, drag-to-reorder (`dragRows`: pointer drag from a `.grip` on `[data-drag]` rows, arrow keys when focused; the array is spliced once on drop).
 - `public/charts.js`: results view; hand-written SVG/HTML charts, tooltips, data tables. Labels go through `textContent`.
 - `public/store.js`: storage switch. `file` mode when served by the Node server, `browser` (localStorage) otherwise.
 - `public/index.html`, `public/styles.css`: markup and styles. Colors are CSS custom properties with separate light/dark steps.

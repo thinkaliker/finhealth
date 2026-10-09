@@ -108,9 +108,10 @@
     <details class="sec" id="sec-expenses" open>
       <summary>Monthly expenses <span class="sum" x-text="sum('expenses')"></span></summary>
       <div class="secbody">
-        <div class="colhead row exp"><span>Category</span><span>Per month</span><span></span></div>
+        <div class="colhead row exp"><span></span><span>Category</span><span>Per month</span><span></span></div>
         <template x-for="(r, i) in data.expenses" :key="rowKey(r)">
-          <div class="row exp">
+          <div class="row exp" data-drag>
+            <button class="grip" type="button" aria-label="Reorder category: drag, or press up or down arrow" title="Drag to reorder" @pointerdown="dragStart('expenses', $event)" @keydown="dragKey('expenses', i, $event)"></button>
             <input class="txt" type="text" aria-label="Category name" x-model="r.name">
             <div class="num"><input type="number" step="any" min="0" inputmode="decimal" aria-label="Monthly amount" x-model.number="r.amount"></div>
             <button class="btn icon" type="button" aria-label="Remove category" title="Remove" @click="remove('expenses', i)">✕</button>
@@ -124,9 +125,10 @@
       <summary>Debts <span class="sum" x-text="sum('debts')"></span></summary>
       <div class="secbody">
         <div class="note" x-show="!hasDebts()">No debts entered.</div>
-        <div class="colhead row debt" x-show="hasDebts()"><span>Name</span><span>Balance</span><span>APR</span><span>Min / mo</span><span></span></div>
+        <div class="colhead row debt" x-show="hasDebts()"><span></span><span>Name</span><span>Balance</span><span>APR</span><span>Min / mo</span><span></span></div>
         <template x-for="(d, i) in data.debts" :key="rowKey(d)">
-          <div class="row debt">
+          <div class="row debt" data-drag>
+            <button class="grip" type="button" aria-label="Reorder debt: drag, or press up or down arrow" title="Drag to reorder" @pointerdown="dragStart('debts', $event)" @keydown="dragKey('debts', i, $event)"></button>
             <input class="txt" type="text" aria-label="Debt name" placeholder="e.g. car loan" x-model="d.name">
             <div class="num"><input type="number" step="any" min="0" inputmode="decimal" aria-label="Balance" x-model.number="d.balance"></div>
             <div class="num pct"><input type="number" step="any" inputmode="decimal" aria-label="APR" :value="pctVal(d, 'apr')" @input="setPct(d, 'apr', $event)"></div>
@@ -142,8 +144,9 @@
       <summary>Accounts <span class="sum" x-text="sum('accounts')"></span></summary>
       <div class="secbody">
         <template x-for="(a, i) in data.accounts" :key="rowKey(a)">
-          <div class="acct">
+          <div class="acct" data-drag>
             <div class="top">
+              <button class="grip" type="button" aria-label="Reorder account: drag, or press up or down arrow" title="Drag to reorder" @pointerdown="dragStart('accounts', $event)" @keydown="dragKey('accounts', i, $event)"></button>
               <input class="txt" type="text" aria-label="Account name" placeholder="Account name" x-model="a.name">
               <select class="txt" aria-label="Account type" @change="setType(a, $event)">
                 <template x-for="t in accountTypes" :key="t.value">

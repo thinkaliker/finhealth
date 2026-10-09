@@ -23,6 +23,65 @@ const plain = d => JSON.parse(JSON.stringify(d, (k, v) => (k.startsWith("_") ? u
 const blank = () => ({ income: {}, retirement: {}, profile: {}, expenses: [], debts: [], accounts: [], history: [] });
 const money = v => (v < 0 ? "−" : "") + Math.abs(Math.round(v)).toLocaleString();
 
+/**
+ * Pointer drag from a row's grip. Other rows slide to show the drop slot and the page scrolls near the
+ * viewport edges; onDrop(from, to) runs once on release, so Alpine never moves the row mid-drag.
+ */
+let dragging = false;
+function dragRows(ev, onDrop) {
+  if (dragging) return; // a second finger on another grip
+  dragging = true;
+  const grip = ev.currentTarget, row = grip.closest("[data-drag]"), box = row.parentElement;
+  const rows = [...box.children].filter(r => r.hasAttribute("data-drag"));
+  const from = rows.indexOf(row);
+  const boxes = rows.map(r => { const b = r.getBoundingClientRect(); return { top: b.top + scrollY, bottom: b.bottom + scrollY }; });
+  const me = boxes[from], next = boxes[from + 1], prev = boxes[from - 1];
+  const shift = me.bottom - me.top + (next ? next.top - me.bottom : prev ? me.top - prev.bottom : 0);
+  const minDy = boxes[0].top - me.top, maxDy = boxes[boxes.length - 1].bottom - me.bottom;
+  const startY = ev.clientY + scrollY, headerH = document.querySelector("header")?.offsetHeight ?? 0;
+  let y = ev.clientY, to = from, raf = 0;
+
+  const update = () => {
+    const dy = Math.min(Math.max(y + scrollY - startY, minDy), maxDy), top = me.top + dy, bottom = me.bottom + dy;
+    to = from;
+    boxes.forEach((b, j) => {
+      const mid = (b.top + b.bottom) / 2;
+      if (j < from && top < mid) to--;
+      if (j > from && bottom > mid) to++;
+    });
+    rows.forEach((r, j) => {
+      const t = j === from ? dy : from < j && j <= to ? -shift : to <= j && j < from ? shift : 0;
+      r.style.transform = t ? `translateY(${t}px)` : "";
+    });
+  };
+  // auto-scroll near the edges, only while more of the list is hidden in that direction
+  const EDGE = 48;
+  const tick = () => {
+    let v = y < headerH + EDGE ? -(headerH + EDGE - y) / 6 : y > innerHeight - EDGE ? (y - innerHeight + EDGE) / 6 : 0;
+    v = Math.max(-16, Math.min(16, v));
+    if ((v < 0 && boxes[0].top - scrollY < headerH) || (v > 0 && boxes[boxes.length - 1].bottom - scrollY > innerHeight)) {
+      scrollBy(0, v); update();
+    }
+    raf = requestAnimationFrame(tick);
+  };
+  const move = e => { y = e.clientY; update(); };
+  const end = () => {
+    dragging = false;
+    cancelAnimationFrame(raf);
+    grip.removeEventListener("pointermove", move);
+    box.classList.remove("sorting"); // before clearing transforms, so rows don't animate back
+    row.classList.remove("dragging");
+    for (const r of rows) r.style.transform = "";
+    if (to !== from) onDrop(from, to);
+  };
+  grip.setPointerCapture(ev.pointerId);
+  grip.addEventListener("pointermove", move);
+  grip.addEventListener("lostpointercapture", end, { once: true }); // fires after pointerup and pointercancel
+  box.classList.add("sorting");
+  row.classList.add("dragging");
+  raf = requestAnimationFrame(tick);
+}
+
 Alpine.data("app", () => ({
   data: blank(),
   savedSnap: "",
@@ -206,6 +265,21 @@ Alpine.data("app", () => ({
 
   // ---------------------------------------------------------------- lists
   remove(list, i) { this.data[list].splice(i, 1); },
+  moveRow(list, from, to) { const a = this.data[list]; a.splice(to, 0, a.splice(from, 1)[0]); },
+  dragStart(list, ev) {
+    if (ev.button !== 0) return;
+    ev.preventDefault(); // no text selection or focus change while dragging
+    dragRows(ev, (from, to) => this.moveRow(list, from, to));
+  },
+  dragKey(list, i, ev) {
+    const d = ev.key === "ArrowUp" ? -1 : ev.key === "ArrowDown" ? 1 : 0;
+    if (!d) return;
+    ev.preventDefault();
+    const to = i + d, box = ev.currentTarget.closest("[data-drag]").parentElement;
+    if (to < 0 || to >= this.data[list].length) return;
+    this.moveRow(list, i, to);
+    this.$nextTick(() => box.querySelectorAll(":scope > [data-drag] .grip")[to]?.focus());
+  },
   addExpense() {
     this.data.expenses.push({ name: "", amount: 0, _id: nextId++ });
     this.$nextTick(() => this.$root.querySelector("#sec-expenses .row:last-of-type input")?.focus());
