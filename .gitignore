@@ -3,6 +3,7 @@ data.json
 *.json.bak
 *.json.tmp
 finhealth-*.json
+finance-summary-*.md
 node_modules/
 .venv/
 __pycache__/
