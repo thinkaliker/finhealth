@@ -74,18 +74,18 @@
               </template>
             </select></div>
           <template x-if="isMonthly()">
-            <div class="num money"><input id="f-th" type="number" step="any" min="0" inputmode="decimal" x-model.number="data.income.take_home_monthly"></div></template>
+            <div class="num money"><input type="text" id="f-th" inputmode="decimal" autocomplete="off" x-money:take_home_monthly="data.income"></div></template>
           <template x-if="isBiweekly()">
-            <div class="num money"><input id="f-th" type="number" step="any" min="0" inputmode="decimal" x-model.number="data.income.take_home_biweekly"></div></template>
+            <div class="num money"><input type="text" id="f-th" inputmode="decimal" autocomplete="off" x-money:take_home_biweekly="data.income"></div></template>
           <div class="hint" x-text="takeHomeHint()"></div></div>
         <div class="field"><label for="f-gross">Gross salary / year</label>
-          <div class="num money"><input id="f-gross" type="number" step="any" min="0" inputmode="decimal" x-model.number="data.income.gross_annual"></div>
+          <div class="num money"><input type="text" id="f-gross" inputmode="decimal" autocomplete="off" x-money:gross_annual="data.income"></div>
           <div class="hint">Before any deductions. Needed for 401k amounts, taxes, and debt-to-income.</div></div>
         <div class="field"><label for="f-od" x-text="deductionsLabel()"></label>
           <template x-if="isMonthly()">
-            <div class="num money"><input id="f-od" type="number" step="any" min="0" inputmode="decimal" x-model.number="data.income.other_deductions_monthly"></div></template>
+            <div class="num money"><input type="text" id="f-od" inputmode="decimal" autocomplete="off" x-money:other_deductions_monthly="data.income"></div></template>
           <template x-if="isBiweekly()">
-            <div class="num money"><input id="f-od" type="number" step="any" min="0" inputmode="decimal" x-model.number="data.income.other_deductions_biweekly"></div></template>
+            <div class="num money"><input type="text" id="f-od" inputmode="decimal" autocomplete="off" x-money:other_deductions_biweekly="data.income"></div></template>
           <div class="hint">Optional. Health, dental, vision premiums, HSA/FSA: anything withheld besides taxes and 401(k). Without it, these count as taxes.</div></div>
       </div>
     </details>
@@ -136,9 +136,9 @@
         <template x-if="hasSavings()">
           <div>
             <div class="field"><label for="f-si">From pay to investments / month</label>
-              <div class="num money"><input id="f-si" type="number" step="any" min="0" inputmode="decimal" x-model.number="data.savings.monthly_to_investments"></div></div>
+              <div class="num money"><input type="text" id="f-si" inputmode="decimal" autocomplete="off" x-money:monthly_to_investments="data.savings"></div></div>
             <div class="field"><label for="f-sc">From pay to cash savings / month</label>
-              <div class="num money"><input id="f-sc" type="number" step="any" min="0" inputmode="decimal" x-model.number="data.savings.monthly_to_cash"></div></div>
+              <div class="num money"><input type="text" id="f-sc" inputmode="decimal" autocomplete="off" x-money:monthly_to_cash="data.savings"></div></div>
           </div>
         </template>
       </div>
@@ -152,7 +152,7 @@
           <div class="row exp" data-drag>
             <button class="grip" type="button" aria-label="Reorder category: drag, or press up or down arrow" title="Drag to reorder" @pointerdown="dragStart('expenses', $event)" @keydown="dragKey('expenses', i, $event)"></button>
             <input class="txt" type="text" aria-label="Category name" x-model="r.name">
-            <div class="num money"><input type="number" step="any" min="0" inputmode="decimal" aria-label="Monthly amount" x-model.number="r.amount"></div>
+            <div class="num money"><input type="text" inputmode="decimal" aria-label="Monthly amount" autocomplete="off" x-money:amount="r"></div>
             <button class="btn icon" type="button" aria-label="Remove category" title="Remove" @click="remove('expenses', i)">✕</button>
           </div>
         </template>
@@ -169,9 +169,9 @@
           <div class="row debt" data-drag>
             <button class="grip" type="button" aria-label="Reorder debt: drag, or press up or down arrow" title="Drag to reorder" @pointerdown="dragStart('debts', $event)" @keydown="dragKey('debts', i, $event)"></button>
             <input class="txt" type="text" aria-label="Debt name" placeholder="e.g. car loan" x-model="d.name">
-            <div class="num money"><input type="number" step="any" min="0" inputmode="decimal" aria-label="Balance" x-model.number="d.balance"></div>
+            <div class="num money"><input type="text" inputmode="decimal" aria-label="Balance" autocomplete="off" x-money:balance="d"></div>
             <div class="num pct"><input type="number" step="any" inputmode="decimal" aria-label="APR" :value="pctVal(d, 'apr')" @input="setPct(d, 'apr', $event)"></div>
-            <div class="num money"><input type="number" step="any" min="0" inputmode="decimal" aria-label="Minimum payment" x-model.number="d.min_payment"></div>
+            <div class="num money"><input type="text" inputmode="decimal" aria-label="Minimum payment" autocomplete="off" x-money:min_payment="d"></div>
             <button class="btn icon" type="button" aria-label="Remove debt" title="Remove" @click="remove('debts', i)">✕</button>
           </div>
         </template>
@@ -187,18 +187,18 @@
         <template x-if="hasHome()">
           <div>
             <div class="field"><label for="f-hv">Home value</label>
-              <div class="num money"><input id="f-hv" type="number" step="any" min="0" inputmode="decimal" x-model.number="data.home.value"></div>
+              <div class="num money"><input type="text" id="f-hv" inputmode="decimal" autocomplete="off" x-money:value="data.home"></div>
               <div class="hint">Your estimate of what it would sell for today.</div></div>
             <div class="field"><label for="f-mb">Mortgage balance</label>
-              <div class="num money"><input id="f-mb" type="number" step="any" min="0" inputmode="decimal" x-model.number="data.home.mortgage_balance"></div>
+              <div class="num money"><input type="text" id="f-mb" inputmode="decimal" autocomplete="off" x-money:mortgage_balance="data.home"></div>
               <div class="hint">Principal still owed; 0 if paid off.</div></div>
             <div class="field"><label for="f-mapr">Mortgage rate</label>
               <div class="num pct"><input id="f-mapr" type="number" step="any" inputmode="decimal" :value="pctVal(data.home, 'mortgage_apr')" @input="setPct(data.home, 'mortgage_apr', $event)"></div></div>
             <div class="field"><label for="f-mp">Mortgage payment / month</label>
-              <div class="num money"><input id="f-mp" type="number" step="any" min="0" inputmode="decimal" x-model.number="data.home.mortgage_payment"></div>
+              <div class="num money"><input type="text" id="f-mp" inputmode="decimal" autocomplete="off" x-money:mortgage_payment="data.home"></div>
               <div class="hint">Principal and interest only.</div></div>
             <div class="field"><label for="f-hc">Property tax, insurance, HOA / month</label>
-              <div class="num money"><input id="f-hc" type="number" step="any" min="0" inputmode="decimal" x-model.number="data.home.costs_monthly"></div>
+              <div class="num money"><input type="text" id="f-hc" inputmode="decimal" autocomplete="off" x-money:costs_monthly="data.home"></div>
               <div class="hint">Escrow, PMI, and HOA dues. Don't also list these, or the mortgage, under expenses or debts.</div></div>
           </div>
         </template>
@@ -221,7 +221,7 @@
               <button class="btn icon" type="button" aria-label="Remove account" title="Remove" @click="remove('accounts', i)">✕</button>
             </div>
             <div class="bal"><span>Balance</span>
-              <div class="num money"><input type="number" step="any" min="0" inputmode="decimal" aria-label="Balance" x-model.number="a.balance"></div></div>
+              <div class="num money"><input type="text" inputmode="decimal" aria-label="Balance" autocomplete="off" x-money:balance="a"></div></div>
             <div class="bal" x-show="hasApr(a)"><span>APR</span>
               <div class="num pct"><input type="number" step="any" inputmode="decimal" aria-label="APR" :value="pctVal(a, 'apr')" @input="setPct(a, 'apr', $event)"></div></div>
 
@@ -265,8 +265,8 @@
         <template x-for="(h, i) in data.history" :key="rowKey(h)">
           <div class="row hist">
             <input class="txt" type="date" aria-label="Snapshot date" x-model="h.date">
-            <div class="num money"><input type="number" step="any" inputmode="decimal" aria-label="Net worth" x-model.number="h.net_worth"></div>
-            <div class="num money"><input type="number" step="any" min="0" inputmode="decimal" aria-label="Investable" x-model.number="h.investable"></div>
+            <div class="num money"><input type="text" aria-label="Net worth" autocomplete="off" x-money:net_worth="h"></div>
+            <div class="num money"><input type="text" inputmode="decimal" aria-label="Investable" autocomplete="off" x-money:investable="h"></div>
             <button class="btn icon" type="button" aria-label="Remove snapshot" title="Remove" @click="remove('history', i)">✕</button>
           </div>
         </template>

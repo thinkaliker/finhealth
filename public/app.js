@@ -3,7 +3,7 @@
 // defined here, which is what the CSP build requires (no eval).
 import Alpine from "./vendor/alpine-csp.esm.min.js";
 import { normalize, analyze, exportMarkdown, todayISO, addMonths, BIWEEKLY_TO_MONTHLY, matchPct, fullMatchAt,
-  moneyFormat, CURRENCIES, DEFAULT_CURRENCY } from "./finhealth.js";
+  moneyFormat, CURRENCIES, DEFAULT_CURRENCY, formatAmount, parseAmount } from "./finhealth.js";
 import { renderResults, drawCharts, setFiHandler } from "./charts.js";
 import { detectStore } from "./store.js";
 
@@ -29,10 +29,27 @@ const fmtFor = code => fmts[code ?? DEFAULT_CURRENCY] ??= moneyFormat(code ?? DE
 let money = fmtFor().money; // follows data.currency; set in recompute()
 /** The symbol shown inside money inputs (.num.money) comes from CSS variables. */
 function showCurrencySymbol(code) {
-  const sym = fmtFor(code).symbol, root = document.documentElement.style;
-  root.setProperty("--cur", JSON.stringify(sym));
-  root.setProperty("--cur-pad", sym ? `calc(${sym.length}ch + 12px)` : "8px");
+  const { symbol, symbolAfter } = fmtFor(code), root = document.documentElement;
+  root.style.setProperty("--cur", JSON.stringify(symbol));
+  root.style.setProperty("--cur-pad", symbol ? `calc(${symbol.length}ch + 12px)` : "8px");
+  root.classList.toggle("cur-after", symbolAfter); // "1.234 €": symbol on the right
 }
+
+// x-money:<key>="<object>" on a text input: shows object[key] grouped by the currency's convention (1,234.50 / 1.234,50).
+// Typing is left alone; every keystroke is parsed into the number, and the text is regrouped when the field loses focus.
+Alpine.directive("money", (el, { value: key, expression }, { evaluateLater, effect, cleanup }) => {
+  const getObj = evaluateLater(expression), getCur = evaluateLater("data.currency");
+  let obj, cur;
+  effect(() => getCur(c => {
+    cur = c;
+    getObj(o => { obj = o; const v = o?.[key]; if (document.activeElement !== el) el.value = formatAmount(v, cur); });
+  }));
+  const onInput = () => { if (obj) obj[key] = parseAmount(el.value, cur); };
+  const onBlur = () => { el.value = formatAmount(obj?.[key], cur); };
+  el.addEventListener("input", onInput);
+  el.addEventListener("blur", onBlur);
+  cleanup(() => { el.removeEventListener("input", onInput); el.removeEventListener("blur", onBlur); });
+});
 const themeStore = window.finhealthTheme; // from theme.js, loaded in <head> so the saved theme applies before first paint
 const pctText = v => +(v * 100).toFixed(2) + "%";
 

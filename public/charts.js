@@ -99,6 +99,7 @@ function lineChart(host, { xs, xLabel, series, yFmt, yFmtLong, height = 240, zer
   if (zero) lo = Math.min(0, lo);
   const pad = (hi - lo) * 0.06 || 1; lo = zero && lo >= 0 ? lo : lo - pad; hi += pad;
   const ticks = niceTicks(lo, hi); lo = Math.min(lo, ticks[0]); hi = Math.max(hi, ticks[ticks.length - 1]);
+  m.l = Math.max(m.l, Math.max(...ticks.map(t => yFmt(t).length)) * 6.5 + 12); // room for labels like "1,2 Mio. €"
   const x0 = xs[0], x1 = xs[xs.length - 1];
   const X = x => m.l + (x1 === x0 ? (W - m.l - m.r) / 2 : (x - x0) / (x1 - x0) * (W - m.l - m.r));
   const Y = v => H - m.b - (v - lo) / (hi - lo) * (H - m.t - m.b);

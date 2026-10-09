@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { normalize, analyze, exportJSON, exportMarkdown, payoffMonths, cdNextMaturity, addMonths, parseDate, matchPct, fullMatchAt, fiPlan, moneyFormat, reportText } from "../public/finhealth.js";
+import { normalize, analyze, exportJSON, exportMarkdown, payoffMonths, cdNextMaturity, addMonths, parseDate, matchPct, fullMatchAt, fiPlan, moneyFormat, reportText, formatAmount, parseAmount } from "../public/finhealth.js";
 
 const EXAMPLE = JSON.parse(fs.readFileSync(new URL("../public/example.json", import.meta.url)));
 const TODAY = "2026-10-08";
@@ -205,6 +205,30 @@ test("currency: formatting, validation, default USD, CLI report", () => {
   assert.match(reportText(A), /take_home_monthly\s+\$6,200/);
   assert.match(reportText(analyze(normalize({ ...EXAMPLE, currency: "GBP" }), TODAY)), /take_home_monthly\s+£6,200/);
   assert.doesNotMatch(exportMarkdown(A), /\$/); // the LLM export stays amount-free
+});
+
+test("money inputs: grouped display and parsing follow the currency's convention", () => {
+  const cases = [ // [currency, typed, parsed, shown after leaving the field]
+    ["USD", "98,000.50", 98000.5, "98,000.50"], ["USD", "$1,234", 1234, "1,234"], ["USD", "-5,000", -5000, "-5,000"],
+    ["EUR", "98.000,50", 98000.5, "98.000,50"], ["EUR", "98,000", 98, "98"],
+    ["CHF", "1’234.5", 1234.5, null], ["CHF", "1'234.5", 1234.5, null],
+    ["INR", "1,23,456", 123456, "1,23,456"], ["SEK", "1 234,5", 1234.5, null], ["JPY", "1,000", 1000, "1,000"],
+  ];
+  for (const [cur, typed, n, shown] of cases) {
+    assert.equal(parseAmount(typed, cur), n, `${cur} ${typed}`);
+    if (shown) assert.equal(formatAmount(n, cur), shown, `${cur} ${n}`);
+    assert.equal(parseAmount(formatAmount(n, cur), cur), n, `${cur} round-trip`); // whatever we show parses back
+  }
+  assert.equal(parseAmount("", "USD"), null);
+  assert.equal(parseAmount("-", "USD"), null); // mid-typing a negative
+  assert.equal(parseAmount("abc", "USD"), "abc"); // left for normalize() to report
+  assert.throws(() => normalize({ income: { gross_annual: parseAmount("abc", "USD") } }), /expected a number/);
+  assert.equal(formatAmount(null, "USD"), "");
+  // results follow the same convention, including where the symbol goes
+  const eur = moneyFormat("EUR");
+  assert.equal(eur.money(1234), "1.234 €");
+  assert.equal(eur.symbolAfter, true);
+  assert.equal(moneyFormat("USD").symbolAfter, false);
 });
 
 test("home: housing is its own cash-flow line, equity counts in net worth, housing ratios checked", () => {

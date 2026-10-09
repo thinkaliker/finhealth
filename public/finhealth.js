@@ -15,13 +15,51 @@ export const HIGH_INTEREST_APR = 0.08;
 export const DEFAULT_CURRENCY = "USD";
 export const CURRENCIES = ["USD", "EUR", "GBP", "CAD", "AUD", "NZD", "CHF", "JPY", "CNY", "INR", "SGD", "HKD", "SEK", "NOK", "DKK", "MXN", "BRL", "ZAR"];
 
-/** Money formatting for a currency: {money: "$1,234", short: "$1.2M" (axis ticks), symbol: "$"}. Negatives use a true minus. */
-export function moneyFormat(currency = DEFAULT_CURRENCY, locale) {
+// number convention per currency (digit grouping, decimal mark, symbol position); "none" uses the browser's locale
+export const CURRENCY_LOCALES = { USD: "en-US", EUR: "de-DE", GBP: "en-GB", CAD: "en-CA", AUD: "en-AU", NZD: "en-NZ", CHF: "de-CH",
+  JPY: "ja-JP", CNY: "zh-CN", INR: "en-IN", SGD: "en-SG", HKD: "en-HK", SEK: "sv-SE", NOK: "nb-NO", DKK: "da-DK", MXN: "es-MX", BRL: "pt-BR", ZAR: "en-ZA" };
+const localeFor = cur => CURRENCY_LOCALES[cur ?? DEFAULT_CURRENCY];
+
+/**
+ * Money formatting for a currency, in its convention: {money: "$1,234" / "1.234 €", short: "$1.2M" (axis ticks),
+ * symbol: "$", symbolAfter: false}. Negatives use a true minus.
+ */
+export function moneyFormat(currency = DEFAULT_CURRENCY, locale = localeFor(currency)) {
   const cur = currency === "none" ? {} : { style: "currency", currency, currencyDisplay: "narrowSymbol" };
   const full = new Intl.NumberFormat(locale, { ...cur, minimumFractionDigits: 0, maximumFractionDigits: 0 });
   const compact = new Intl.NumberFormat(locale, { ...cur, notation: "compact", minimumFractionDigits: 0, maximumFractionDigits: 1 });
   const signed = f => v => { const r = Math.round(v); return (r < 0 ? "−" : "") + f.format(Math.abs(r)); };
-  return { money: signed(full), short: signed(compact), symbol: full.formatToParts(0).find(p => p.type === "currency")?.value ?? "" };
+  const parts = full.formatToParts(1), at = parts.findIndex(p => p.type === "currency");
+  return { money: signed(full), short: signed(compact), symbol: parts[at]?.value ?? "",
+    symbolAfter: at > parts.findIndex(p => p.type === "integer") };
+}
+
+const inputFormats = new Map();
+/** Number → text for a money input, grouped by the currency's convention ("98,000.5" / "98.000,5"); no symbol. */
+export function formatAmount(v, cur) {
+  if (v === null || v === undefined || v === "") return "";
+  if (typeof v !== "number") return String(v); // unparseable text stays visible until fixed
+  const cents = !Number.isInteger(Math.round(v * 100) / 100), key = `${localeFor(cur)}|${cents}`;
+  if (!inputFormats.has(key)) inputFormats.set(key, new Intl.NumberFormat(localeFor(cur), { minimumFractionDigits: cents ? 2 : 0, maximumFractionDigits: cents ? 2 : 0 }));
+  return inputFormats.get(key).format(v); // 98,000 or 98,000.50
+}
+
+/**
+ * Text typed into a money input → number, by the currency's convention: group marks (and spaces, apostrophes,
+ * currency symbols) are dropped and its decimal mark is read as the decimal point, so "98,000" is 98000 in USD and 98
+ * in EUR. Empty → null. Anything else that isn't a number is returned unchanged so normalize() reports it.
+ */
+export function parseAmount(text, cur) {
+  const raw = String(text ?? "").trim();
+  if (!raw) return null;
+  const parts = new Intl.NumberFormat(localeFor(cur)).formatToParts(1234567.5);
+  const group = parts.find(p => p.type === "group")?.value ?? ",", decimal = parts.find(p => p.type === "decimal")?.value ?? ".";
+  let t = raw.replace(/[\s  '’]/g, "").split(group).join("").replace(/[−–]/g, "-");
+  if (decimal !== ".") t = t.split(decimal).join(".");
+  t = t.replace(/[^\d.-]/g, "");
+  if (t === "" || t === "-") return t === "-" ? null : raw;
+  const n = Number(t);
+  return Number.isFinite(n) ? n : raw;
 }
 
 // financial independence settings (data.fi); the 4% rule means a target of 25x annual spending
@@ -619,7 +657,7 @@ export function reportText(A) {
     if (k === "debt_balance" && a.home) rows.push(["home_value", a.home.value], ["mortgage_balance", a.home.mortgage_balance]);
   }
   const lines = ["LOCAL REPORT (contains amounts; do not share)", ""];
-  const { money } = moneyFormat(A.currency ?? DEFAULT_CURRENCY, "en-US");
+  const { money } = moneyFormat(A.currency ?? DEFAULT_CURRENCY);
   for (const [k, v] of rows) lines.push(`  ${k.padEnd(28)} ${money(v).padStart(14)}`);
   return lines.join("\n") + "\n\n" + exportMarkdown(A);
 }

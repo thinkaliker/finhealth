@@ -72,6 +72,8 @@ details.sec > summary .sum { margin-left: auto; font-weight: 400; color: var(--t
 /* currency symbol inside money inputs; --cur / --cur-pad are set from the data's currency by app.js */
 .num.money::before { content: var(--cur, "$"); position: absolute; left: 8px; top: 50%; transform: translateY(-50%); color: var(--text-3); pointer-events: none; }
 .num.money input { padding-left: var(--cur-pad, 20px); }
+:root.cur-after .num.money::before { left: auto; right: 8px; }
+:root.cur-after .num.money input { padding-left: 8px; padding-right: var(--cur-pad, 20px); }
 .num.pct::after { content: "%"; position: absolute; right: 8px; top: 50%; transform: translateY(-50%); color: var(--text-3); pointer-events: none; }
 input:focus-visible, select:focus-visible, .btn:focus-visible, .grip:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .txt { width: 100%; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); }
