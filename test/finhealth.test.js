@@ -16,16 +16,19 @@ function amountsIn(o, out = new Set()) {
   return out;
 }
 
-test("export contains no input or derived currency amounts", () => {
-  const amounts = amountsIn(EXAMPLE);
-  for (const [k, v] of Object.entries(A.amounts)) if (typeof v === "number") amountsIn(v, amounts);
-  amountsIn(A.amounts.cds.map(c => c.balance), amounts);
-  for (const text of [exportMarkdown(A), JSON.stringify(exportJSON(A))]) {
+function assertNoLeaks(input, R) {
+  const amounts = amountsIn(input);
+  for (const v of Object.values(R.amounts)) if (typeof v === "number") amountsIn(v, amounts);
+  amountsIn(R.amounts.cds.map(c => c.balance), amounts);
+  amountsIn(R.amounts.home ?? {}, amounts);
+  for (const text of [exportMarkdown(R), JSON.stringify(exportJSON(R))]) {
     const nums = (text.match(/\d[\d,]*\.?\d*/g) ?? []).map(n => Number(n.replace(/,/g, "")));
     const leaked = nums.filter(n => n >= 100 && n !== 100 && !(n >= 2000 && n < 2100) && [...amounts].some(a => Math.abs(n - a) < 1));
     assert.deepEqual([...new Set(leaked)], [], "possible amount leak");
   }
-});
+}
+
+test("export contains no input or derived currency amounts", () => assertNoLeaks(EXAMPLE, A));
 
 test("core ratios", () => {
   const r = A.ratios, burn = 4350 + 485;
@@ -89,6 +92,36 @@ test("take-home per biweekly paycheck averages to monthly; export stays amount-f
   // the key present picks the period, even at zero; a zero monthly alongside is dropped, a real one is an error
   assert.deepEqual(normalize({ income: { take_home_monthly: 0, take_home_biweekly: null } }).income, { take_home_biweekly: 0 });
   assert.throws(() => normalize({ income: { take_home_monthly: 6000, take_home_biweekly: 2800 } }), /not both/);
+});
+
+test("home: housing is its own cash-flow line, equity counts in net worth, housing ratios checked", () => {
+  const input = { ...EXAMPLE, expenses: EXAMPLE.expenses.filter(e => e.name !== "housing"),
+    home: { value: 420000, mortgage_balance: 310000, mortgage_apr: 0.0625, mortgage_payment: 1910, costs_monthly: 520 } };
+  const d = normalize(input), H = analyze(d, TODAY), grossM = 115000 / 12, burn = 2250 + 485 + 2430;
+  close(H.amounts.surplus_monthly, 6200 - burn);
+  close(H.amounts.net_worth, A.amounts.net_worth + 110000);
+  close(H.amounts.investable, A.amounts.investable);
+  close(H.ratios.emergency_fund_months, (4500 + 7000 + 2500 + 2500 - 2500 * 0.045 / 12 * 3) / burn);
+  close(H.ratios.home.housing_to_gross, 2430 / grossM);
+  close(H.ratios.home.total_debt_payments_to_gross, (2430 + 485) / grossM);
+  close(H.ratios.home.loan_to_value, 310000 / 420000);
+  assert.equal(H.ratios.home.mortgage_months_to_payoff, 360);
+  const st = Object.fromEntries(H.checks.map(c => [c.key, c.status]));
+  assert.deepEqual([st.housing, st.dti_total, st.home_equity], ["ok", "ok", "ok"]);
+  assert.match(H.checks.find(c => c.key === "dti").label, /excluding housing/);
+  assert.match(exportMarkdown(H), /## Home[\s\S]*payoff at current payment: 30\.0 years/);
+  assertNoLeaks(input, H);
+  assert.deepEqual(normalize(JSON.parse(JSON.stringify(d))), d);
+});
+
+test("home: renters unaffected; double-listed mortgage flagged; bad rate rejected", () => {
+  assert.equal(A.ratios.home, null);
+  assert.equal(A.amounts.home, null);
+  assert.ok(!A.checks.some(c => ["housing", "dti_total", "home_equity"].includes(c.key)));
+  const R = analyze(normalize({ home: { value: 300000, mortgage_balance: 0 }, debts: [{ name: "Mortgage", balance: 1, apr: 0.06, min_payment: 1 }] }), TODAY);
+  assert.ok(R.assumptions.some(a => /Mortgage .*counted twice/.test(a)));
+  assert.equal(R.checks.find(c => c.key === "home_equity").detail, "No mortgage; the home is owned outright.");
+  assert.throws(() => normalize({ home: { mortgage_apr: 6.5 } }), /fraction/);
 });
 
 test("expenses accepted as an object too", () => {

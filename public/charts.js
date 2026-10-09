@@ -77,8 +77,9 @@ const ALLOC_KEYS = [["stocks", "Stocks"], ["bonds", "Bonds"], ["cash", "Cash"], 
 const COLORS = {
   alloc: { stocks: "--s1", bonds: "--s2", cash: "--s3", single_stock: "--s4", other: "--s5" },
   tax: { cash: "--s3", taxable: "--s2", tax_deferred: "--s1", tax_free: "--s4" },
-  flow: { expenses: "--s1", debt: "--s2", saved: "--s3", unassigned: "--s4" },
+  flow: { expenses: "--s1", debt: "--s2", saved: "--s3", unassigned: "--s4", housing: "--s5" },
   cash: { cash: "--s3", hysa: "--s1", cd: "--s2" },
+  home: { equity: "--s3", mortgage: "--s2" },
 };
 const CASH_NAMES = { cash: "Checking / savings", hysa: "High-yield savings", cd: "CDs" };
 
@@ -233,6 +234,7 @@ function draw() {
   const saved = Math.min(a.saved_from_pay_monthly, Math.max(0, a.surplus_monthly));
   const unassigned = Math.max(0, a.surplus_monthly - saved);
   const flow = [
+    ...(a.home ? [{ name: "Housing", value: a.home.housing, color: C(COLORS.flow.housing) }] : []),
     { name: "Expenses", value: exp, color: C(COLORS.flow.expenses) },
     { name: "Debt payments", value: debtPay, color: C(COLORS.flow.debt) },
     { name: "Saved from pay", value: saved, color: C(COLORS.flow.saved) },
@@ -326,6 +328,22 @@ function draw() {
       const raw = S.data.debts[i] || {};
       return [d.name, money(raw.balance || 0), pct(d.apr, 1), money(raw.min_payment || 0), d.months_to_payoff_at_minimum ?? "never"];
     })) : null));
+
+  // home
+  if (a.home) {
+    const h = a.home, H = r.home, m = H.mortgage_months_to_payoff;
+    const segs = [
+      { name: "Equity", value: Math.max(0, h.equity), color: C(COLORS.home.equity) },
+      { name: "Mortgage", value: h.mortgage_balance, color: C(COLORS.home.mortgage) },
+    ];
+    grid.append(card("Home", `Value ${money(h.value)} · equity ${money(h.equity)} · housing ${money(h.housing)} / month.`,
+      h.value > 0 ? el("div", {}, el("div", { class: "stacklab", text: "Who owns the home's value" }), stackBar(segs, money),
+        legend(segs.map(s => ({ ...s, value: `${money(s.value)} · ${pct(s.value / h.value)}` })))) : el("div", { class: "empty", text: "Enter the home's value to see equity." }),
+      el("p", { class: "note", text: `Housing is ${pct(H.housing_to_gross)} of gross income (guideline 28% or less); with other debt payments, ${pct(H.total_debt_payments_to_gross)} (guideline 36%). ` +
+        (m === 0 ? "No mortgage." : m === null ? "At the current payment the mortgage never pays off." : `Mortgage paid off in ${(m / 12).toFixed(1)} years at the current payment.`) }),
+      table(["Item", "Amount"], [["Home value", money(h.value)], ["Mortgage balance", money(h.mortgage_balance)], ["Equity", money(h.equity)],
+        ["Mortgage payment / month", money(h.mortgage_payment)], ["Property tax, insurance, HOA / month", money(h.costs)]])));
+  }
   R.append(grid);
 
   // FI projection

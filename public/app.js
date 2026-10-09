@@ -16,6 +16,7 @@ function forEditing(d) {
   for (const l of LISTS) out[l] = (d[l] ?? []).map(r => ({ ...r, _id: nextId++ }));
   for (const a of out.accounts) if (a.allocation) a.allocation = { ...a.allocation };
   if (d.savings) out.savings = { ...d.savings };
+  if (d.home) out.home = { ...d.home };
   return out;
 }
 /** Strip editor-only keys (leading underscore) and proxies. */
@@ -158,6 +159,7 @@ Alpine.data("app", () => ({
       savings: n.savings ? money(a.saved_from_pay_monthly) + " / mo" : "assumed: full surplus",
       expenses: money(a.expenses_monthly) + " / mo",
       debts: n.debts.length + " · " + money(a.debt_balance),
+      home: a.home ? money(a.home.housing) + " / mo · equity " + money(a.home.equity) : "off",
       accounts: n.accounts.length + " · " + money(a.assets),
       history: n.history.length + " snapshot" + (n.history.length === 1 ? "" : "s"),
     };
@@ -261,6 +263,11 @@ Alpine.data("app", () => ({
   toggleSavings(ev) {
     if (ev.target.checked) this.data.savings = { monthly_to_investments: 0, monthly_to_cash: 0 };
     else delete this.data.savings;
+  },
+  hasHome() { return !!this.data.home; },
+  toggleHome(ev) {
+    if (ev.target.checked) this.data.home = { value: 0, mortgage_balance: 0, mortgage_apr: 0, mortgage_payment: 0, costs_monthly: 0 };
+    else delete this.data.home;
   },
 
   // ---------------------------------------------------------------- lists

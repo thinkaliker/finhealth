@@ -140,6 +140,32 @@
       </div>
     </details>
 
+    <details class="sec" id="sec-home" open>
+      <summary>Home <span class="sum" x-text="sum('home')"></span></summary>
+      <div class="secbody">
+        <label class="toggle"><input type="checkbox" :checked="hasHome()" @change="toggleHome($event)"> I own a home</label>
+        <div class="note">Off: rent or other housing goes under Monthly expenses.</div>
+        <template x-if="hasHome()">
+          <div>
+            <div class="field"><label for="f-hv">Home value</label>
+              <div class="num"><input id="f-hv" type="number" step="any" min="0" inputmode="decimal" x-model.number="data.home.value"></div>
+              <div class="hint">Your estimate of what it would sell for today.</div></div>
+            <div class="field"><label for="f-mb">Mortgage balance</label>
+              <div class="num"><input id="f-mb" type="number" step="any" min="0" inputmode="decimal" x-model.number="data.home.mortgage_balance"></div>
+              <div class="hint">Principal still owed; 0 if paid off.</div></div>
+            <div class="field"><label for="f-mapr">Mortgage rate</label>
+              <div class="num pct"><input id="f-mapr" type="number" step="any" inputmode="decimal" :value="pctVal(data.home, 'mortgage_apr')" @input="setPct(data.home, 'mortgage_apr', $event)"></div></div>
+            <div class="field"><label for="f-mp">Mortgage payment / month</label>
+              <div class="num"><input id="f-mp" type="number" step="any" min="0" inputmode="decimal" x-model.number="data.home.mortgage_payment"></div>
+              <div class="hint">Principal and interest only.</div></div>
+            <div class="field"><label for="f-hc">Property tax, insurance, HOA / month</label>
+              <div class="num"><input id="f-hc" type="number" step="any" min="0" inputmode="decimal" x-model.number="data.home.costs_monthly"></div>
+              <div class="hint">Escrow, PMI, and HOA dues. Don't also list these, or the mortgage, under expenses or debts.</div></div>
+          </div>
+        </template>
+      </div>
+    </details>
+
     <details class="sec" id="sec-accounts" open>
       <summary>Accounts <span class="sum" x-text="sum('accounts')"></span></summary>
       <div class="secbody">

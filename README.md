@@ -64,6 +64,8 @@ JSON. See `public/example.json`.
   "retirement": { "employee_contribution_pct": 0.06, "employer_match_rate": 0.5,
                   "employer_match_limit_pct": 0.06, "employer_nonelective_pct": 0 },
   "savings":    { "monthly_to_investments": 800, "monthly_to_cash": 300 },  // optional
+  "home":       { "value": 420000, "mortgage_balance": 310000, "mortgage_apr": 0.0625,  // optional
+                  "mortgage_payment": 1910, "costs_monthly": 520 },
   "expenses":   [{ "name": "housing", "amount": 2100 }],
   "debts":      [{ "name": "credit card", "balance": 2300, "apr": 0.2399, "min_payment": 75 }],
   "accounts":   [
@@ -79,17 +81,22 @@ JSON. See `public/example.json`.
 
 Rates and percentages are fractions (`0.045` = 4.5%); the web form shows them as percents. Take-home pay is either `take_home_monthly` or `take_home_biweekly` (one paycheck), not both; biweekly is averaged to monthly as × 26 ÷ 12, so months with a third paycheck are spread across the year. Account types: `cash`, `hysa`, `cd`, `brokerage`, `401k`, `403b`, `traditional_ira`, `roth_ira`, `roth_401k`, `hsa`. Investment accounts take an `allocation` (`stocks`, `bonds`, `cash`, `single_stock`, `other`) summing to 1.
 
+Home (optional): `mortgage_payment` is principal and interest only; `costs_monthly` is property tax, insurance, PMI, and HOA. Leave the mortgage and those costs out of `expenses` and `debts`. With a home, net worth includes equity (value − mortgage balance), and housing (payment + costs) is its own monthly outflow in cash flow, the emergency fund, and the FI target. Investable assets and FI progress exclude the home. Without it, rent goes under `expenses`.
+
 CDs: `renews: true` models a ladder rung. Once `maturity_date` passes, the next maturity rolls forward by `term_months`. For the emergency fund, a CD maturing within 90 days counts in full; later ones count net of `penalty_months` of interest. A non-renewing CD past maturity raises a "watch" check.
 
 ## Checks
 
 | Check | Formula | Thresholds |
 |---|---|---|
-| Cash flow | (take-home − expenses − debt minimums) / take-home | negative = act |
+| Cash flow | (take-home − expenses − housing − debt minimums) / take-home | negative = act |
 | Savings rate | (saved from pay + employee 401k + employer 401k) / (take-home + employee 401k + employer 401k) | <10% act, 10–20% watch |
-| Emergency fund | (checking + HYSA + CDs at accessible value) / (expenses + debt minimums) | <3 mo act, 3–6 watch |
+| Emergency fund | (checking + HYSA + CDs at accessible value) / (expenses + housing + debt minimums) | <3 mo act, 3–6 watch |
 | Match captured | min(deferral, match limit) / match limit | <100% act |
-| Debt-to-income | debt minimums / gross monthly | >36% act, 15–36% watch |
+| Debt-to-income | debt minimums (excluding housing) / gross monthly | >36% act, 15–36% watch |
+| Housing cost (home only) | (mortgage payment + property costs) / gross monthly | >36% act, 28–36% watch |
+| Debt-to-income incl. housing (home only) | (housing + debt minimums) / gross monthly | >43% act, 36–43% watch |
+| Home equity (home only) | (value − mortgage balance) / value; payoff time at current payment | <20% watch |
 | High-interest debt | balances at APR ≥ 8% / annual gross | any = act |
 | Concentration | single_stock / investable | >20% act, 10–20% watch |
 | Allocation vs age | stock share vs (110 − age) | >15 pt gap = watch |
