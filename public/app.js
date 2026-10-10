@@ -42,6 +42,19 @@ function showCurrencySymbol(code) {
   root.classList.toggle("cur-after", symbolAfter); // "1.234 €": symbol on the right
 }
 
+// Clicking into a number field that shows 0 empties it, so typing "5" gives 5, not "50" or "05". Leaving it untouched
+// shows 0 again; the data only changes if you type (the value is never written here).
+document.addEventListener("focusin", e => {
+  const t = e.target;
+  if (t.matches?.(".num input") && t.value.trim() === "0") { t.value = ""; t.dataset.zeroCleared = ""; }
+});
+document.addEventListener("focusout", e => {
+  const t = e.target;
+  if (!t.dataset || !("zeroCleared" in t.dataset)) return;
+  delete t.dataset.zeroCleared;
+  if (t.value === "") t.value = "0";
+});
+
 // x-money:<key>="<object>" on a text input: shows object[key] grouped by the currency's convention (1,234.50 / 1.234,50).
 // Typing is left alone; every keystroke is parsed into the number, and the text is regrouped when the field loses focus.
 Alpine.directive("money", (el, { value: key, expression }, { evaluateLater, effect, cleanup }) => {
