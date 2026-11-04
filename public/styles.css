@@ -60,7 +60,7 @@ details.sec > summary { cursor: pointer; padding: 10px 14px; font-weight: 600; l
 details.sec > summary::before { content: "▸"; color: var(--text-3); font-size: 11px; transition: transform .15s; }
 details.sec[open] > summary::before { transform: rotate(90deg); }
 details.sec > summary .sum { margin-left: auto; font-weight: 400; color: var(--text-2); font-size: 12px; }
-.secbody { padding: 0 14px 14px; }
+.secbody { padding: 0 14px 14px; container-type: inline-size; } /* debt and loan rows stack by this width */
 .field { display: grid; grid-template-columns: 1fr 140px; align-items: center; gap: 8px; margin: 6px 0; }
 .field label { color: var(--text-2); }
 .field .lblsel { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
@@ -69,6 +69,9 @@ details.sec > summary .sum { margin-left: auto; font-weight: 400; color: var(--t
 .num { position: relative; }
 .num input { width: 100%; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); text-align: right; }
 .num.pct input { padding-right: 22px; }
+/* no spin buttons: they cover ~15px of an already narrow field on hover and focus */
+.num input[type="number"] { appearance: textfield; -moz-appearance: textfield; }
+.num input::-webkit-inner-spin-button, .num input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
 /* currency symbol inside money inputs; --cur / --cur-pad are set from the data's currency by app.js */
 .num.money::before { content: var(--cur, "$"); position: absolute; left: 8px; top: 50%; transform: translateY(-50%); color: var(--text-3); pointer-events: none; }
 .num.money input { padding-left: var(--cur-pad, 20px); }
@@ -81,11 +84,16 @@ select.txt { padding: 5px 6px; }
 .txt.small { width: auto; padding: 3px 6px; font-size: 12px; }
 .row { display: grid; gap: 6px; align-items: center; margin: 6px 0; }
 .row.exp { grid-template-columns: 18px 1fr 120px 28px; }
-.row.debt { grid-template-columns: 18px 1fr 88px 72px 72px 28px; }
-@media (max-width: 520px) {
-  .row.debt { grid-template-columns: 18px 1fr 1fr 1fr 28px; }
-  .row.debt > :nth-child(2) { grid-column: 2 / -1; }
-  .row.debt > :nth-child(3) { grid-column-start: 2; }
+.row.debt { grid-template-columns: 18px 1fr 120px 80px 104px 28px; }
+/* a name and three amounts don't fit on one line in the two-column page or on a phone: the amounts get the whole
+   second line (balance under the grip, payment under the remove button), so long numbers with cents still show */
+@container (max-width: 560px) {
+  .row.debt { grid-template-columns: 18px 1fr 76px 1fr 28px; }
+  .row.debt > :nth-child(2) { grid-area: 1 / 2 / 2 / 5; }
+  .row.debt > :nth-child(3) { grid-area: 2 / 1 / 3 / 3; }
+  .row.debt > :nth-child(4) { grid-area: 2 / 3; }
+  .row.debt > :nth-child(5) { grid-area: 2 / 4 / 3 / 6; }
+  .row.debt > :nth-child(6) { grid-area: 1 / 5; }
 }
 /* drag-to-reorder: grip is a 2x3 dot handle; rows slide while .sorting is on the list */
 .grip { width: 18px; height: 28px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--text-3);
@@ -98,10 +106,14 @@ select.txt { padding: 5px 6px; }
 .row.hist { grid-template-columns: 130px 1fr 1fr 28px; }
 .row.oinc { grid-template-columns: 18px 1fr 110px 64px 28px; }
 .row.oinc .cont { justify-self: center; }
-.row.loan { grid-template-columns: 1fr 88px 64px 80px 28px; }
-@media (max-width: 520px) {
-  .row.loan { grid-template-columns: 1fr 1fr 1fr 28px; }
-  .row.loan > :first-child { grid-column: 1 / -1; }
+.row.loan { grid-template-columns: 1fr 120px 80px 104px 28px; }
+@container (max-width: 560px) {
+  .row.loan { grid-template-columns: 1.3fr 76px 1fr 28px; } /* mortgage balances are the longest numbers */
+  .row.loan > :nth-child(1) { grid-area: 1 / 1 / 2 / 4; }
+  .row.loan > :nth-child(2) { grid-area: 2 / 1; }
+  .row.loan > :nth-child(3) { grid-area: 2 / 2; }
+  .row.loan > :nth-child(4) { grid-area: 2 / 3 / 3 / 5; }
+  .row.loan > :nth-child(5) { grid-area: 1 / 4; }
 }
 .acct .top .toggle { margin: 0; font-size: 12px; white-space: nowrap; }
 .acct .colhead.loan { margin-top: 8px; }
