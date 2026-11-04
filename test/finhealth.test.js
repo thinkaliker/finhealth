@@ -352,6 +352,36 @@ test("expenses accepted as an object too", () => {
   assert.deepEqual(normalize({ expenses: { rent: 100 } }).expenses, [{ name: "rent", amount: 100 }]);
 });
 
+test("growth: today's computed values are the last point and are marked as not a snapshot", () => {
+  const pts = A.growth.points;
+  assert.equal(pts.at(-1).date, TODAY);
+  assert.equal(pts.at(-1).current, true);
+  assert.ok(pts.slice(0, -1).every(p => !p.current));
+  assert.equal(exportJSON(A).growth.points.at(-1).current, true);
+  assert.match(exportMarkdown(A), new RegExp(`\\| ${TODAY} \\(today\\) \\|`));
+});
+
+test("growth: yearly rates only once the points span a calendar year", () => {
+  assert.ok(A.growth.net_worth_cagr != null && A.growth.trend, "example spans two years");
+  assert.equal(A.growth.rates_note, undefined);
+  // snapshots on these dates (plus today's values as the last point)
+  const since = (dates, today) => analyze(normalize({ ...EXAMPLE,
+    history: dates.map((date, i) => ({ date, net_worth: 50000 + 5000 * i, investable: 40000 + 5000 * i })) }), today).growth;
+  for (const [dates, today] of [[["2025-10-08"], TODAY], [["2024-02-29"], "2025-02-28"], [["2025-10-08", "2026-01-15"], TODAY]]) {
+    const g = since(dates, today);
+    assert.ok(g.net_worth_cagr != null && g.investable_cagr != null, `${dates[0]} to ${today} is a year`);
+  }
+  assert.ok(since(["2025-10-08", "2026-01-15"], TODAY).trend, "three points over a year: half-period rates and trend");
+  for (const [dates, today] of [[["2025-10-09"], TODAY], [["2026-09-10"], TODAY], [["2024-03-01"], "2025-02-28"], [["2025-10-09", "2026-01-15"], TODAY]]) {
+    const g = since(dates, today);
+    for (const k of ["net_worth_cagr", "investable_cagr", "first_half_cagr", "second_half_cagr", "trend"]) assert.equal(g[k], undefined, `${dates[0]} to ${today}: ${k}`);
+    assert.match(g.rates_note, /left out until the points span at least a year/);
+  }
+  const md = exportMarkdown(analyze(normalize({ ...EXAMPLE, history: [{ date: "2026-09-10", net_worth: 50000, investable: 40000 }] }), TODAY));
+  assert.doesNotMatch(md, /cagr/);
+  assert.match(md, /- Yearly growth rates are left out until the points span at least a year\./);
+});
+
 test("empty data analyzes without errors", () => {
   const E = analyze(normalize({}), TODAY);
   assert.ok(Array.isArray(E.checks));

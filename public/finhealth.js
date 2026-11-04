@@ -604,15 +604,22 @@ function growth(pts) {
       net_worth_index: p0.net_worth > 0 ? Math.round(1000 * p.net_worth / p0.net_worth) / 10 : null,
       investable_index: p0.investable > 0 ? Math.round(1000 * p.investable / p0.investable) / 10 : null,
     };
+    if (p.current) row.current = true; // today's computed values, appended after the saved snapshots
     if (prev) row.net_worth_change_pct = prev.net_worth > 0 ? Math.round(1000 * (p.net_worth / prev.net_worth - 1)) / 10 : null;
     out.points.push(row);
     prev = p;
   }
   const last = pts[pts.length - 1];
-  const years = monthsBetween(p0.date, last.date) / 12;
-  if (years > 0 && p0.net_worth > 0 && last.net_worth > 0) out.net_worth_cagr = (last.net_worth / p0.net_worth) ** (1 / years) - 1;
-  if (years > 0 && p0.investable > 0 && last.investable > 0) out.investable_cagr = (last.investable / p0.investable) ** (1 / years) - 1;
-  if (pts.length >= 3) {
+  // Yearly rates only once the points span a full calendar year, however they're spaced: annualizing a few weeks
+  // turns a small change into a huge rate. The half-period rates and trend follow the same rule.
+  if (addMonths(p0.date, 12) > last.date) {
+    out.rates_note = "Yearly growth rates are left out until the points span at least a year.";
+  } else {
+    const years = monthsBetween(p0.date, last.date) / 12;
+    if (p0.net_worth > 0 && last.net_worth > 0) out.net_worth_cagr = (last.net_worth / p0.net_worth) ** (1 / years) - 1;
+    if (p0.investable > 0 && last.investable > 0) out.investable_cagr = (last.investable / p0.investable) ** (1 / years) - 1;
+  }
+  if (!out.rates_note && pts.length >= 3) {
     const mid = Math.floor(pts.length / 2);
     const rate = (a, b) => {
       const yrs = monthsBetween(a.date, b.date) / 12;
@@ -719,15 +726,17 @@ export function exportMarkdown(A) {
   }
   L.push("", "## Growth shape", "");
   if (g.points) {
-    L.push("| Date | Months from base | Net worth index | Investable index | NW change vs prior |", "|---|---|---|---|---|");
+    L.push("Saved snapshots, then today's current values as the last row (marked today; not a saved snapshot).", "",
+      "| Date | Months from base | Net worth index | Investable index | NW change vs prior |", "|---|---|---|---|---|");
     for (const p of g.points) {
       const ch = p.net_worth_change_pct;
       const f1 = v => (v == null ? "n/a" : v.toFixed(1));
-      L.push(`| ${p.date} | ${f1(p.months_from_base)} | ${f1(p.net_worth_index)} | ${f1(p.investable_index)} | ${ch == null ? "" : `${ch >= 0 ? "+" : ""}${ch.toFixed(1)}%`} |`);
+      L.push(`| ${p.date}${p.current ? " (today)" : ""} | ${f1(p.months_from_base)} | ${f1(p.net_worth_index)} | ${f1(p.investable_index)} | ${ch == null ? "" : `${ch >= 0 ? "+" : ""}${ch.toFixed(1)}%`} |`);
     }
     for (const k of ["net_worth_cagr", "investable_cagr", "first_half_cagr", "second_half_cagr"])
       if (g[k] != null) L.push(`- ${k.replace(/_/g, " ")}: ${fmtPct(g[k], 1)}`);
     if (g.trend) L.push(`- trend: ${g.trend}`);
+    if (g.rates_note) L.push(`- ${g.rates_note}`);
   }
   L.push(`- ${g.note}`);
   if (A.assumptions.length) L.push("", "## Assumptions", "", ...A.assumptions.map(a => `- ${a}`));
