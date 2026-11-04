@@ -39,9 +39,8 @@
     <button class="btn primary" type="button" @click="save()" :disabled="!isDirty()">Save</button>
   </div>
   <input class="hidden-input" type="file" accept="application/json,.json" x-ref="file" @change="importFile($event)">
+  <div class="error" role="alert" x-show="error" x-text="error" x-cloak></div>
 </header>
-
-<div class="error" role="alert" x-show="error" x-text="error" x-cloak></div>
 
 <!-- first run: nothing stored yet -->
 <section class="onboard" x-show="onboarding && !loading" x-cloak>

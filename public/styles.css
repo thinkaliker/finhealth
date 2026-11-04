@@ -47,7 +47,8 @@ header h1 { font-size: 16px; margin: 0; font-weight: 600; }
 .tabs { display: none; gap: 4px; padding: 8px 16px 0; }
 .tabs button { border: none; background: none; padding: 8px 12px; border-bottom: 2px solid transparent; color: var(--text-2); cursor: pointer; }
 .tabs button[aria-selected="true"] { color: var(--text); border-color: var(--accent); }
-.error { margin: 12px 16px 0; padding: 10px 12px; border-radius: 8px; background: var(--err-bg); color: var(--err-fg); }
+/* inside the sticky header, so it stays in view while you're down at the field or the export */
+.error { flex-basis: 100%; padding: 8px 12px; border-radius: 8px; background: var(--err-bg); color: var(--err-fg); }
 .layout { display: grid; grid-template-columns: minmax(360px, 440px) 1fr; gap: 20px; padding: 16px; max-width: 1500px; margin: 0 auto; }
 @media (max-width: 1000px) {
   .layout { grid-template-columns: 1fr; padding: 12px 16px; }
@@ -204,6 +205,9 @@ th { color: var(--text-3); font-weight: 500; }
 #tip .r span { color: var(--text-2); }
 pre.export { white-space: pre-wrap; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 12px;
   font-size: 12px; max-height: 420px; overflow: auto; margin: 8px 0 0; }
+/* form has an error: results are from the last valid data */
+.results.stale .checks, .results.stale .card > :not(.stale-note) { opacity: .45; }
+.stale-note { margin: 8px 0; padding: 8px 12px; border-radius: 8px; background: var(--err-bg); color: var(--err-fg); font-size: 13px; }
 .empty { color: var(--text-3); font-size: 13px; padding: 24px 0; text-align: center; }
 .fi-controls { margin: 4px 0 10px; }
 .fi-row { display: grid; grid-template-columns: 190px 1fr minmax(170px, auto); gap: 4px 12px; align-items: center; font-size: 12px; margin: 4px 0; }

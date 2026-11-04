@@ -3,7 +3,7 @@
 // light/dark steps are chosen in styles.css, not computed here.
 import { CASH_LIKE, todayISO, fiPlan, FI_RANGES, moneyFormat } from "./finhealth.js";
 
-const S = { analysis: null, data: null, growthView: "amounts", root: null };
+const S = { analysis: null, data: null, growthView: "amounts", root: null, stale: "" };
 const NS = "http://www.w3.org/2000/svg";
 
 // ---------------------------------------------------------------- helpers
@@ -205,7 +205,14 @@ function fmtCheck(c) {
 }
 
 export function renderResults(root, analysis, data) {
-  S.root = root; S.analysis = analysis; S.data = data;
+  S.root = root; S.analysis = analysis; S.data = data; S.stale = "";
+  draw();
+}
+
+/** The form has an error, so the results still show the last valid data: dim them, say so, and don't offer that export. */
+export function markStale(message) {
+  if (S.stale === message) return;
+  S.stale = message;
   draw();
 }
 
@@ -217,6 +224,7 @@ function draw() {
   S.fiPlan = null; // any slider preview is superseded by the fresh analysis
   setCurrency(A.currency);
   R.replaceChildren();
+  R.classList.toggle("stale", !!S.stale);
 
   // checks
   R.append(el("div", { class: "checks" }, ...A.checks.map(c => el("div", { class: "check", "data-s": c.status },
@@ -386,13 +394,14 @@ function draw() {
   // export
   const pre = el("pre", { class: "export", text: A.export_md });
   R.append(card("LLM export", "Amount-free summary: ratios, durations, and indexes only. Paste this into an LLM.",
+    S.stale ? el("p", { class: "stale-note", role: "status", text: `Out of date: this is from before your latest edits, which have an error (${S.stale}). Fix it to update the export.` }) : null,
     el("div", { class: "addrow" },
-      el("button", { class: "btn small", type: "button", text: "Copy", onclick: async e => {
+      el("button", { class: "btn small", type: "button", text: "Copy", disabled: !!S.stale, onclick: async e => {
         try { await navigator.clipboard.writeText(A.export_md); e.target.textContent = "Copied"; }
         catch { const rg = document.createRange(); rg.selectNodeContents(pre); getSelection().removeAllRanges(); getSelection().addRange(rg); e.target.textContent = "Selected — press Ctrl/Cmd+C"; }
         setTimeout(() => e.target.textContent = "Copy", 1600);
       } }),
-      el("button", { class: "btn small", type: "button", text: "Download .md", onclick: () => {
+      el("button", { class: "btn small", type: "button", text: "Download .md", disabled: !!S.stale, onclick: () => {
         const u = URL.createObjectURL(new Blob([A.export_md], { type: "text/markdown" }));
         el("a", { href: u, download: `finance-summary-${today()}.md` }).click(); setTimeout(() => URL.revokeObjectURL(u), 1000);
       } })),

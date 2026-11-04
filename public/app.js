@@ -4,7 +4,7 @@
 import Alpine from "./vendor/alpine-csp.esm.min.js";
 import { normalize, analyze, exportMarkdown, todayISO, addMonths, BIWEEKLY_TO_MONTHLY, matchPct, fullMatchAt,
   moneyFormat, CURRENCIES, DEFAULT_CURRENCY, formatAmount, parseAmount } from "./finhealth.js";
-import { renderResults, drawCharts, setFiHandler } from "./charts.js";
+import { renderResults, drawCharts, setFiHandler, markStale } from "./charts.js";
 import { detectStore } from "./store.js";
 
 let nextId = 1;
@@ -202,7 +202,7 @@ Alpine.data("app", () => ({
     try {
       n = normalize(plain(this.data));
       A = analyze(n, todayISO());
-    } catch (e) { this.error = e.message; return; }
+    } catch (e) { this.error = e.message; markStale(e.message); return; }
     this.error = "";
     A.export_md = exportMarkdown(A);
     this._current = { A, n };
