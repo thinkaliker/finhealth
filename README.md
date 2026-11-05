@@ -63,11 +63,14 @@ JSON. See `public/example.json`.
   "people": [                                                    // one entry per earner; the rest is shared
     { "name": "", "age": 34,                                     // name and age optional
       "income":     { "take_home_monthly": 6200, "gross_annual": 115000 },  // or "take_home_biweekly": 2860 per paycheck
-      "retirement": { "employee_contribution_pct": 0.06, "employer_match_rate": 0.5,
-                      "employer_match_limit_pct": 0.06, "employer_nonelective_pct": 0 } }
+      "retirement": { "pretax_pct": 0.04, "roth_pct": 0.02, "after_tax_pct": 0,
+                      "employer_match_rate": 0.5, "employer_match_limit_pct": 0.06, "employer_nonelective_pct": 0 } }
+    // "match_after_tax": true if the match counts after-tax contributions too
+    // "paycheck": { "pretax_pct": 0.06, ... }: the split your take-home reflects, when the one above is a what-if
     // tiered match instead of rate + limit: 100% of the first 4%, then 50% of the next 4%
     // "retirement": { ..., "match_tiers": [{ "rate": 1, "pct": 0.04 }, { "rate": 0.5, "pct": 0.04 }] }
   ],
+  "tax":        { "filing_status": "single", "state": "MA" },  // optional; for the 401(k) estimates
   "savings":    { "monthly_to_investments": 800, "monthly_to_cash": 300 },  // optional
   "other_income": [{ "name": "Rent", "amount": 2200, "continues": true }],  // optional; monthly
   "properties": [                                                // optional; "residence": you live there
@@ -91,6 +94,10 @@ JSON. See `public/example.json`.
 ```
 
 People: each earner has their own `income` (take-home, gross salary, pay period, other paycheck deductions), `retirement` (401k contribution and employer match), and optional `name` and `age`. Expenses, savings, other income, debts, real estate, accounts, and history are shared by the household. Results add everyone up, and check taxes withheld and employer match for each person. Names appear only on the page; the LLM export calls people "person 1", "person 2". Files with the older top-level `income`, `retirement`, and `profile.age` load as person 1.
+
+401(k): contributions are fractions of gross salary, split three ways. Pre-tax (`pretax_pct`) lowers income tax now and is taxed on withdrawal; Roth (`roth_pct`) is taxed now and tax-free on withdrawal; after-tax (`after_tax_pct`) is taxed now, and only its growth is taxed on withdrawal. The employer match is based on pre-tax + Roth, plus after-tax when `match_after_tax` is true. Files with the older single `employee_contribution_pct` load it as pre-tax. For USD data the results check the year's IRS limits (pre-tax + Roth, and everything going in including employer and after-tax, with the age 50+ catch-up) and compare your split with all pre-tax and all Roth at the same total: take-home, income tax now, and value after tax at withdrawal. Income tax is estimated from the year's federal brackets for `tax.filing_status` (`single`, `married_joint`, `married_separate`, `head_of_household`; unset means single, or married filing jointly for two people) with the standard deduction, plus the brackets of `tax.state` (a two-letter code, or `DC`) after its standard deduction and personal exemption. Married filing jointly uses the couple's combined income; states have single and joint brackets, and other statuses use the single ones. Pennsylvania taxes pre-tax 401(k) contributions, so there pre-tax saves federal tax only. Local (county or city) income taxes, phase-outs, and credits are not included.
+
+The brackets, standard deductions, and 401(k) limits are in `public/tax-tables.json`, one entry per tax year (federal from the IRS revenue procedure and notice, states from the Tax Foundation's yearly table). A year without an entry uses the latest earlier one and says so in the assumptions; add the new year when the figures come out. To try a different split, change the percentages: the take-home you entered stays tied to `paycheck` (your paycheck's split), and the results re-estimate take-home for the new one. The export gives the split, tax rates, and limits only as under / near / over, since a share of a public dollar limit would reveal the salary.
 
 Rates and percentages are fractions (`0.045` = 4.5%); the web form shows them as percents. Take-home pay is either `take_home_monthly` or `take_home_biweekly` (one paycheck), not both; biweekly is averaged to monthly as × 26 ÷ 12, so months with a third paycheck are spread across the year. Optional `other_deductions_monthly` / `other_deductions_biweekly` (health premiums, HSA/FSA, anything withheld besides taxes and 401k) works the same way. Taxes withheld are estimated as gross − your 401k − other deductions − take-home, so `gross_annual` should be before deductions and should include a bonus only if take-home does. Account types: `cash`, `hysa`, `cd`, `brokerage`, `401k`, `403b`, `traditional_ira`, `roth_ira`, `roth_401k`, `hsa`. Investment accounts take an `allocation` (`stocks`, `bonds`, `cash`, `single_stock`, `other`) summing to 1.
 

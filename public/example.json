@@ -9,13 +9,19 @@
         "gross_annual": 115000
       },
       "retirement": {
-        "employee_contribution_pct": 0.06,
+        "pretax_pct": 0.04,
+        "roth_pct": 0.02,
+        "after_tax_pct": 0.0,
         "employer_match_rate": 0.5,
         "employer_match_limit_pct": 0.06,
         "employer_nonelective_pct": 0.0
       }
     }
   ],
+  "tax": {
+    "filing_status": "single",
+    "state": "MA"
+  },
   "savings": {
     "monthly_to_investments": 800,
     "monthly_to_cash": 300

@@ -5,6 +5,7 @@ Personal-finance health check. The user enters income, 401(k), expenses, debts, 
 ## Layout
 
 - `public/finhealth.js`: all calculations (normalize, analyze, exportMarkdown/exportJSON, CD date logic). Pure functions, no DOM or Node APIs; shared by browser and Node. Change calculations here only.
+  - 401(k): each person's contribution is split `pretax_pct` / `roth_pct` / `after_tax_pct`; `retirement.paycheck` is the split the entered take-home reflects (kept only when it differs; then take-home is re-estimated as a what-if). Federal brackets, standard deductions, 401(k) limits, and every state's brackets live in `public/tax-tables.json` by year (imported with `with { type: "json" }`, which needs Node 18.20+ and current browsers); a missing year falls back to the latest one with an assumption note. Brackets are `[taxable income from, rate]`. Add each year from the IRS Rev. Proc. (brackets, Oct/Nov), the IRS Notice (401(k) limits, Nov), and the Tax Foundation's "State Individual Income Tax Rates and Brackets" table (Feb); `test/finhealth.test.js` checks federal brackets against the printed rate tables and the shape of every state entry. The state's name stays out of the export.
 - `public/app.js`: Alpine (CSP build) page controller: form state, save/revert/import/export, onboarding, drag-to-reorder (`dragRows`: pointer drag from a `.grip` on `[data-drag]` rows, arrow keys when focused; the array is spliced once on drop).
 - `public/charts.js`: results view; hand-written SVG/HTML charts, tooltips, data tables. Labels go through `textContent`. The FI sliders preview with `fiPlan()` in place while dragging and save `data.fi` on release through `setFiHandler` (the app re-renders; don't rebuild the card mid-drag).
 - `public/theme.js`: light/dark/auto choice in localStorage, applied before first paint (classic script in `<head>`). Currency is different: `data.currency`, saved with the data; all amounts format through `moneyFormat()` in finhealth.js, in the currency's number convention (`CURRENCY_LOCALES`). Money inputs are text fields with the `x-money:<key>="<object>"` directive (app.js), which groups digits on display and parses typed separators with `parseAmount()`.
@@ -24,6 +25,7 @@ Personal-finance health check. The user enters income, 401(k), expenses, debts, 
 - The page must stay usable as a static site (GitHub Pages) and under the Node server, from the same code.
 - The CSP in `index.html` blocks third-party scripts and cross-origin requests. Keep it. Alpine's CSP build cannot evaluate inline JS expressions: template attributes may only reference properties and methods defined in `Alpine.data("app", ...)`, plus simple property access, comparisons, and assignments. No arrow functions or template literals in HTML attributes.
 - The export must contain no currency amounts. `test/finhealth.test.js` has a leak check; extend it when adding export fields.
+- No ratio to a public dollar figure in the export (e.g. share of the 401(k) limit): with the contribution percentage it gives the salary. Such values go out as words (`value_text` on checks: under / near / over). A federal bracket is fine (a range).
 - Server security: binds 127.0.0.1; rejects a foreign `Host` header (DNS rebinding) and POSTs that are not JSON or carry a foreign `Origin`. Do not bind to 0.0.0.0 without adding authentication; the API has none.
 - `--allow-host name:port` adds an accepted Host/Origin for a reverse proxy. The user chose (2026-10-09) to publish on their tailnet this way with no auth, relying on tailnet ACLs.
 
@@ -41,6 +43,8 @@ On the dev VM it's published with the `publish-to-dev-vm` skill: systemd user se
 
 ## Open followups
 
+- Add 2027 to `public/tax-tables.json` once published: IRS brackets and 401(k) limits (expected Nov 2026), Tax Foundation state table (Feb 2027). Until then 2027 uses 2026 figures.
+- Local income taxes (Maryland counties, New York City, Ohio and Pennsylvania cities) are not modeled.
 - Optional passphrase encryption for the localStorage copy.
 - Contributions per history snapshot, to separate saving from market return in growth.
 - Money market funds / T-bills as cash-like account types.

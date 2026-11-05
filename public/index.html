@@ -100,10 +100,26 @@
         <details class="sec" open>
           <summary><span x-text="personTitle('401(k)', person, pi)"></span> <span class="sum" x-text="personSum('retirement', person)"></span></summary>
           <div class="secbody">
-            <div class="field"><label :for="inputId('emp', person)">401k contribution</label>
-              <div class="num pct"><input :id="inputId('emp', person)" type="number" step="any" inputmode="decimal" :value="pctVal(person.retirement, 'employee_contribution_pct')" @input="setPct(person.retirement, 'employee_contribution_pct', $event)"></div>
-              <div class="hint">Percent of gross salary.</div></div>
+            <div class="field"><label :for="inputId('pre', person)">Pre-tax contribution</label>
+              <div class="num pct"><input :id="inputId('pre', person)" type="number" step="any" inputmode="decimal" :value="pctVal(person.retirement, 'pretax_pct')" @input="setPct(person.retirement, 'pretax_pct', $event)"></div>
+              <div class="hint">Percent of gross salary. Lowers income tax now; withdrawals are taxed.</div></div>
+            <div class="field"><label :for="inputId('roth', person)">Roth contribution</label>
+              <div class="num pct"><input :id="inputId('roth', person)" type="number" step="any" inputmode="decimal" :value="pctVal(person.retirement, 'roth_pct')" @input="setPct(person.retirement, 'roth_pct', $event)"></div>
+              <div class="hint">Taxed now; withdrawals are tax-free. Shares the yearly limit with pre-tax.</div></div>
+            <div class="field"><label :for="inputId('aft', person)">After-tax contribution</label>
+              <div class="num pct"><input :id="inputId('aft', person)" type="number" step="any" inputmode="decimal" :value="pctVal(person.retirement, 'after_tax_pct')" @input="setPct(person.retirement, 'after_tax_pct', $event)"></div>
+              <div class="hint">Taxed now; at withdrawal only its growth is taxed (none if converted to Roth in the plan). Counts toward the total limit only.</div></div>
+            <div class="whatif" x-show="hasWhatIf(person)">
+              <strong>Trying a different split</strong>
+              <p x-text="whatIfText(person)"></p>
+              <div class="addrow">
+                <button class="btn small" type="button" @click="resetSplit(person)">Back to my paycheck</button>
+                <button class="btn small" type="button" @click="usePaycheckSplit(person)">Use this split</button>
+              </div>
+              <p class="hint">Changed it with payroll? Choose Use this split. Take-home pay is set to the estimate until you enter your next paycheck.</p>
+            </div>
             <label class="toggle"><input type="checkbox" :checked="hasTiers(person)" @change="toggleTiers(person, $event)"> Match has tiers (e.g. 100% on the first 4%, then 50% on the next 4%)</label>
+            <label class="toggle"><input type="checkbox" x-model="person.retirement.match_after_tax"> Match counts after-tax contributions too</label>
             <template x-if="isSimpleMatch(person)">
               <div>
                 <div class="field"><label :for="inputId('mr', person)">Employer match rate</label>
@@ -138,6 +154,26 @@
     </template>
     <div class="addrow addperson"><button class="btn small" type="button" @click="addPerson()">+ Add a person</button>
       <span class="note">A second earner: their own pay and 401(k). Expenses, debts, property, and accounts are shared.</span></div>
+
+    <details class="sec" id="sec-tax" open>
+      <summary>Income tax <span class="sum" x-text="sum('tax')"></span></summary>
+      <div class="secbody">
+        <div class="note">Used to compare pre-tax with Roth 401(k) contributions, and to re-estimate take-home pay for a different split. Rates come from this year's federal and state brackets in tax-tables.json.</div>
+        <div class="field wide"><label for="f-fs">Filing status</label>
+          <select class="txt" id="f-fs" @change="setFiling($event)">
+            <template x-for="s in filingStatuses" :key="s.value">
+              <option :value="s.value" :selected="isFiling(s)" x-text="s.label"></option>
+            </template>
+          </select></div>
+        <div class="field wide"><label for="f-state">State</label>
+          <select class="txt" id="f-state" @change="setState($event)">
+            <template x-for="s in states" :key="s.code">
+              <option :value="s.code" :selected="isState(s)" x-text="s.name"></option>
+            </template>
+          </select>
+          <div class="hint" x-text="stateHint()"></div></div>
+      </div>
+    </details>
 
     <details class="sec" id="sec-other-income" open>
       <summary>Other income <span class="sum" x-text="sum('other_income')"></span></summary>

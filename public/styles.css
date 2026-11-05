@@ -67,6 +67,11 @@ details.sec > summary .sum { margin-left: auto; font-weight: 400; color: var(--t
 .field .lblsel { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
 .field .lblsel select { width: auto; }
 .field .hint { grid-column: 1 / -1; margin-top: -4px; font-size: 11px; color: var(--text-3); }
+.field.wide { grid-template-columns: 1fr 220px; }
+/* 401(k) split differs from the paycheck's: results are a what-if */
+.whatif { margin: 8px 0; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface-2); font-size: 12px; }
+.whatif p { margin: 2px 0 6px; }
+.whatif .hint { margin: 6px 0 0; font-size: 11px; color: var(--text-3); }
 .num { position: relative; }
 .num input { width: 100%; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); text-align: right; }
 .num.pct input { padding-right: 22px; }
@@ -196,6 +201,7 @@ table { border-collapse: collapse; width: 100%; font-size: 12px; margin-top: 6px
 th, td { padding: 4px 8px 4px 0; border-bottom: 1px solid var(--grid); text-align: right; }
 th:first-child, td:first-child { text-align: left; }
 th { color: var(--text-3); font-weight: 500; }
+table.cmp tr.mine td { font-weight: 600; } /* the split you have now */
 #tip { position: fixed; pointer-events: none; z-index: 20; background: var(--surface); border: 1px solid var(--line); border-radius: 8px;
   padding: 8px 10px; font-size: 12px; box-shadow: 0 4px 16px rgba(0,0,0,.14); display: none; min-width: 120px; }
 #tip .t { color: var(--text-3); margin-bottom: 4px; }

@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { normalize, analyze, exportJSON, exportMarkdown, payoffMonths, cdNextMaturity, addMonths, parseDate, matchPct, fullMatchAt, fiPlan, moneyFormat, reportText, formatAmount, parseAmount } from "../public/finhealth.js";
+import { normalize, analyze, exportJSON, exportMarkdown, payoffMonths, cdNextMaturity, addMonths, parseDate, matchPct, fullMatchAt, fiPlan, moneyFormat, reportText, formatAmount, parseAmount,
+  bracketTax, bracketRate, taxYear, k401Limits, STATES } from "../public/finhealth.js";
 
 const EXAMPLE = JSON.parse(fs.readFileSync(new URL("../public/example.json", import.meta.url)));
 const TODAY = "2026-10-08";
@@ -24,6 +25,7 @@ function assertNoLeaks(input, R) {
   for (const v of Object.values(R.amounts)) if (typeof v === "number") amountsIn(v, amounts);
   amountsIn(R.amounts.cds.map(c => c.balance), amounts);
   amountsIn(R.amounts.real_estate ?? {}, amounts);
+  amountsIn(R.amounts.people, amounts); // pay, 401(k) flows, limits, and the pre-tax / Roth comparison
   for (const text of [exportMarkdown(R), JSON.stringify(exportJSON(R))]) {
     const nums = (text.match(/\d[\d,]*\.?\d*/g) ?? []).map(n => Number(n.replace(/,/g, "")));
     const leaked = nums.filter(n => n >= 100 && n !== 100 && !(n >= 2000 && n < 2100) && [...amounts].some(a => Math.abs(n - a) < 1));
@@ -134,7 +136,7 @@ test("tiered employer match: 100% of the first 4%, 50% of the next 4%, plus a fl
   const mc = six.checks.find(c => c.key === "match");
   assert.equal(mc.status, "act");
   close(mc.value, 0.05 / 0.06);
-  assert.match(mc.detail, /Contributing 8% of salary gets the full match \(tiered: 100% of the first 4%, then 50% of the next 4%\)/);
+  assert.match(mc.detail, /Contributing 8% of salary \(pre-tax plus Roth\) gets the full match \(tiered: 100% of the first 4%, then 50% of the next 4%\)/);
   assert.equal(at(0.08).checks.find(c => c.key === "match").status, "ok");
 
   // single rate + limit is the one-tier case; the example (50% up to 6%) is unchanged
@@ -324,7 +326,7 @@ test("household: two earners add up; taxes and match are checked per person; nam
 test("household: older files with top-level income, 401(k), and age become person 1", () => {
   const old = { profile: { age: 40 }, income: { take_home_monthly: 5000 }, retirement: { employee_contribution_pct: 0.05 } };
   const d = normalize(old);
-  assert.deepEqual(d.people, [{ name: "", age: 40, income: { take_home_monthly: 5000 }, retirement: { employee_contribution_pct: 0.05 } }]);
+  assert.deepEqual(d.people, [{ name: "", age: 40, income: { take_home_monthly: 5000 }, retirement: { pretax_pct: 0.05 } }]); // one contribution was pre-tax
   assert.equal(d.income, undefined);
   assert.equal(d.profile, undefined);
   assert.throws(() => normalize({ ...old, people: [] }), /not both/);
@@ -380,6 +382,147 @@ test("growth: yearly rates only once the points span a calendar year", () => {
   const md = exportMarkdown(analyze(normalize({ ...EXAMPLE, history: [{ date: "2026-09-10", net_worth: 50000, investable: 40000 }] }), TODAY));
   assert.doesNotMatch(md, /cagr/);
   assert.match(md, /- Yearly growth rates are left out until the points span at least a year\./);
+});
+
+// ---------------------------------------------------------------- 401(k) split, income tax, limits
+const FIG = taxYear("2026-06-01");
+// Massachusetts: a flat 5%, so state tax changes are simple to check
+const earner = (retirement, extra = {}) => ({ people: [{ age: 35, income: { gross_annual: 120000, take_home_monthly: 6000 },
+  retirement: { employer_match_rate: 0.5, employer_match_limit_pct: 0.06, ...retirement } }], tax: { filing_status: "single", state: "MA" }, ...extra });
+
+test("income tax: 2026 brackets match the IRS rate tables (Rev. Proc. 2025-32)", () => {
+  // tax at the top of a bracket, as printed in the tables
+  const at = { married_joint: [[100800, 11600], [211400, 35932], [768700, 206583.5]], head_of_household: [[67450, 7740], [105700, 16155], [640600, 191171]],
+    single: [[50400, 5800], [201775, 41024], [640600, 192979.25]], married_separate: [[105700, 17966], [384350, 103291.75]] };
+  for (const [status, rows] of Object.entries(at)) for (const [income, tax] of rows) close(bracketTax(income, FIG.federal.brackets[status]), tax);
+  assert.equal(bracketRate(96700, FIG.federal.brackets.single), 0.22);
+  assert.equal(bracketRate(105700, FIG.federal.brackets.single), 0.24); // the next dollar is in the 24% bracket
+  assert.equal(bracketTax(0, FIG.federal.brackets.single), 0);
+  assert.deepEqual(k401Limits(35, FIG), { year: 2026, deferral: 24500, total: 72000, catch_up: 0 });
+  assert.equal(k401Limits(50, FIG).deferral, 32500);
+  assert.equal(k401Limits(61, FIG).deferral, 35750);
+  assert.equal(k401Limits(64, FIG).deferral, 32500);
+  assert.equal(taxYear("2027-03-01").year, 2026); // no 2027 figures yet: the latest year on file
+});
+
+test("401(k) split: older single contribution is pre-tax; validation; paycheck split kept only when different", () => {
+  assert.deepEqual(normalize({ retirement: { employee_contribution_pct: 0.08 } }).people[0].retirement, { pretax_pct: 0.08 });
+  assert.throws(() => normalize({ retirement: { employee_contribution_pct: 0.08, roth_pct: 0.02 } }), /not both/);
+  assert.throws(() => normalize({ retirement: { pretax_pct: 6 } }), /fractions of gross pay/);
+  assert.throws(() => normalize({ retirement: { pretax_pct: 0.6, after_tax_pct: 0.5 } }), /at most 1/);
+  const same = normalize(earner({ pretax_pct: 0.06, paycheck: { pretax_pct: 0.06, roth_pct: 0, after_tax_pct: 0 } }));
+  assert.equal(same.people[0].retirement.paycheck, undefined);
+  const diff = normalize(earner({ roth_pct: 0.06, match_after_tax: true, paycheck: { pretax_pct: 0.06 } }));
+  assert.deepEqual(diff.people[0].retirement.paycheck, { pretax_pct: 0.06, roth_pct: 0, after_tax_pct: 0 });
+  assert.equal(diff.people[0].retirement.match_after_tax, true);
+  assert.deepEqual(normalize(JSON.parse(JSON.stringify(diff))), diff);
+  assert.throws(() => normalize({ tax: { filing_status: "joint" } }), /filing_status/);
+  assert.throws(() => normalize({ tax: { state: "XX" } }), /tax.state/);
+  assert.deepEqual(normalize({ tax: { state: " ca " } }).tax, { state: "CA" });
+  assert.equal(normalize({ tax: { state: "" } }).tax, undefined);
+});
+
+test("401(k) split: match basis, what-if take-home, and the pre-tax / Roth comparison", () => {
+  const A1 = analyze(normalize(earner({ pretax_pct: 0.06, roth_pct: 0.02 })), TODAY), p = A1.amounts.people[0], k = p.k401;
+  close(p.employee_401k, 0.08 * 10000);
+  close(p.employer_401k, 0.03 * 10000); // 50% match up to 6%; pre-tax + Roth = 8%
+  // taxable 120,000 x 0.94 - 16,100 = 96,700: 22% federal + 5% state
+  assert.deepEqual(k.marginal, { federal: 0.22, state: 0.05, now: 0.27, state_taxes_pretax: false });
+  assert.equal(k.favored, "pre-tax"); // 27% now vs 10% assumed on withdrawals
+  const [mine, pre, roth] = k.scenarios;
+  assert.deepEqual([mine.label, pre.label, roth.label], ["Your split", "All pre-tax", "All Roth"]);
+  close(mine.take_home_monthly, 6000);
+  close(pre.take_home_monthly, 6000 + 2400 * 0.27 / 12);
+  close(roth.take_home_monthly, 6000 - 7200 * 0.27 / 12);
+  close(roth.tax_now_change_annual, 7200 * 0.27);
+  assert.ok(roth.at_withdrawal.after_tax > pre.at_withdrawal.after_tax);
+  const c = A1.checks.find(x => x.key === "k401_tax");
+  assert.equal(c.value, 0.27);
+
+  // what-if: all Roth while the paycheck has 6% pre-tax + 2% Roth; take-home and taxes withheld follow
+  const W = analyze(normalize(earner({ roth_pct: 0.08, paycheck: { pretax_pct: 0.06, roth_pct: 0.02 } })), TODAY).amounts.people[0];
+  close(W.take_home, 6000 - 7200 * 0.27 / 12);
+  assert.equal(W.take_home_entered, 6000);
+  close(W.taxes, 10000 - 800 - W.take_home);
+
+  // after-tax money counts toward the match only when the plan says so
+  const at = mt => analyze(normalize(earner({ pretax_pct: 0.02, after_tax_pct: 0.04, match_after_tax: mt })), TODAY).amounts.people[0].employer_401k;
+  close(at(false), 0.01 * 10000);
+  close(at(true), 0.03 * 10000);
+});
+
+test("401(k) limits: catch-up, when contributions stop, and the even percentage", () => {
+  const over = earner({ pretax_pct: 0.15, roth_pct: 0.05, after_tax_pct: 0.3, match_after_tax: true });
+  over.people[0].age = 61; over.people[0].income.gross_annual = 200000;
+  const A2 = analyze(normalize(over), TODAY), k = A2.amounts.people[0].k401;
+  assert.deepEqual(k.limits, { year: 2026, deferral: 35750, total: 83250, catch_up: 11250 });
+  close(k.deferral_stop_month, 12 * 35750 / 40000);
+  close(k.even_deferral_pct, 35750 / 200000);
+  close(k.after_tax_stop_month, 12 * 83250 / (40000 + 60000 + 6000)); // everything in reaches the total limit first
+  const c = A2.checks.find(x => x.key === "k401_limit");
+  assert.deepEqual([c.status, c.value, c.value_text], ["act", null, "Over"]);
+  const under = analyze(normalize(earner({ pretax_pct: 0.06 })), TODAY).checks.find(x => x.key === "k401_limit");
+  assert.deepEqual([under.status, under.value_text], ["ok", "Under"]);
+
+  // married filing jointly: one bracket for the couple's combined taxable income
+  const two = { people: [earner({ pretax_pct: 0.1 }).people[0], { ...earner({ roth_pct: 0.05 }).people[0], name: "B" }], tax: { filing_status: "married_joint" } };
+  const [k1, k2] = analyze(normalize(two), TODAY).amounts.people.map(x => x.k401);
+  assert.equal(k1.marginal.federal, 0.22); // 120,000 x 0.9 + 120,000 - 32,200 = 195,800
+  assert.equal(k2.marginal.federal, 0.22);
+
+  // outside USD there are no US limits or brackets
+  assert.equal(analyze(normalize({ ...earner({ pretax_pct: 0.06 }), currency: "EUR" }), TODAY).amounts.people[0].k401, undefined);
+});
+
+test("tax tables: every state and DC, brackets in order, federal for each filing status", () => {
+  assert.equal(STATES.length, 51);
+  assert.deepEqual(Object.keys(FIG.federal.brackets).sort(), ["head_of_household", "married_joint", "married_separate", "single"]);
+  for (const [code, s] of Object.entries(FIG.states)) {
+    assert.match(code, /^[A-Z]{2}$/);
+    for (const b of s.brackets ? [s.brackets.single, s.brackets.married_joint] : []) {
+      assert.equal(b[0][0], 0, `${code} starts at 0`);
+      b.forEach(([from, rate], i) => assert.ok(rate >= 0 && rate < 0.15 && (i === 0 || from > b[i - 1][0]), `${code} bracket ${i}`));
+    }
+  }
+  assert.deepEqual(["AK", "FL", "NV", "NH", "SD", "TN", "TX", "WA", "WY"], Object.keys(FIG.states).filter(c => !FIG.states[c].brackets));
+});
+
+test("state income tax: brackets, standard deduction, joint returns, and a state that taxes pre-tax 401(k)", () => {
+  const k = (state, ret = { pretax_pct: 0.06, roth_pct: 0.02 }, extra) =>
+    analyze(normalize(earner(ret, { tax: { filing_status: "single", state }, ...extra })), TODAY).amounts.people[0].k401;
+  // California: 120,000 x 0.94 - 5,540 = 107,260, in the 9.3% bracket
+  assert.deepEqual(k("CA").marginal, { federal: 0.22, state: 0.093, now: 0.22 + 0.093, state_taxes_pretax: false });
+  assert.equal(k("TX").marginal.state, 0);
+  assert.equal(k(undefined).marginal.state, 0);
+  // Pennsylvania taxes pre-tax contributions: moving them to Roth changes federal tax only
+  const pa = k("PA");
+  assert.deepEqual(pa.marginal, { federal: 0.22, state: 0.0307, now: 0.22, state_taxes_pretax: true });
+  close(pa.scenarios.find(x => x.label === "All Roth").tax_now_change_annual, 7200 * 0.22);
+  // New Jersey, married filing jointly: the couple's combined state income, on the joint brackets
+  const two = { people: [earner({ pretax_pct: 0.1 }).people[0], { ...earner({ roth_pct: 0.05 }).people[0], name: "B" }],
+    tax: { filing_status: "married_joint", state: "NJ" } };
+  const [k1, k2] = analyze(normalize(two), TODAY).amounts.people.map(x => x.k401);
+  assert.equal(k1.marginal.state, 0.0637); // 120,000 x 0.9 + 120,000 - 2,000 exemption = 226,000: over 150,000 on the joint brackets
+  assert.equal(k2.marginal.state, 0.0637);
+  const md = exportMarkdown(analyze(normalize(earner({ pretax_pct: 0.06 }, { tax: { state: "PA" } })), TODAY));
+  assert.match(md, /3\.07% state \(pre-tax contributions don't lower the state part\)/);
+  assert.doesNotMatch(md, /Pennsylvania/); // the state's name stays local
+});
+
+test("401(k) export: split and rates only; limits as under / near / over; no amounts", () => {
+  // 18% of 130,000 is 95.5% of the deferral limit; taxable 130,000 x 0.87 - 16,100 = 96,999 (22%)
+  const near = earner({ pretax_pct: 0.13, roth_pct: 0.05, after_tax_pct: 0.1 });
+  near.people[0].income.gross_annual = 130000;
+  near.people[0].retirement.paycheck = { pretax_pct: 0.18 };
+  const R = analyze(normalize(near), TODAY), md = exportMarkdown(R);
+  assertNoLeaks(near, R);
+  assert.match(md, /## 401\(k\)[\s\S]*13% pre-tax, 5% Roth, 10% after-tax; the employer match counts pre-tax and Roth/);
+  assert.match(md, /22% federal \+ 5% state, vs 10% assumed on withdrawals: pre-tax comes out ahead; take-home with the same pre-tax \+ Roth total, all pre-tax \+[\d.]+%, all Roth -[\d.]+% vs the current split/);
+  assert.match(md, /pre-tax \+ Roth near the annual limit/);
+  assert.match(md, /\| 401\(k\) contribution limit \| OK \| Near \|/);
+  assert.match(md, /What-if: the 401\(k\) split differs from the paycheck split, so take-home pay is re-estimated \(-[\d.]+% vs the paycheck entered\)/);
+  assert.doesNotMatch(md, /24,?500|72,?000|\$/);
+  assert.deepEqual(exportJSON(R).ratios.k401[0].deferral_limit, "near");
 });
 
 test("empty data analyzes without errors", () => {

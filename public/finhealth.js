@@ -1,5 +1,6 @@
 // finhealth core: validation, analysis, and the amount-free export.
 // Pure functions only (no DOM, no Node APIs) so the same file runs in the browser and in Node.
+import TAX_TABLES from "./tax-tables.json" with { type: "json" };
 
 export const TAX_BUCKET = {
   cash: "cash", hysa: "cash", cd: "cash",
@@ -69,6 +70,52 @@ export const CD_PENALTY_FREE_DAYS = 90;     // a CD maturing this soon counts in
 export const CD_DEFAULT_PENALTY_MONTHS = 3; // early-withdrawal penalty, in months of interest, when not given
 export const BIWEEKLY_TO_MONTHLY = 26 / 12;  // 26 paychecks a year; two months get a third one
 
+// ---------------------------------------------------------------- US income tax and 401(k) limits, by tax year
+// The figures are in tax-tables.json, one entry per year: federal brackets and standard deduction, 401(k) limits, and each
+// state's brackets. A year without an entry uses the latest earlier one. Brackets are [taxable income from, rate].
+export const TAX_YEARS = TAX_TABLES.years;
+export const FILING_LABELS = { single: "Single", married_joint: "Married filing jointly", married_separate: "Married filing separately",
+  head_of_household: "Head of household" };
+export const FILING_STATUSES = Object.keys(FILING_LABELS);
+/** Figures for the tax year of `today` (or the latest earlier year on file). */
+export function taxYear(today) {
+  const want = Number(String(today).slice(0, 4)), years = Object.keys(TAX_YEARS).map(Number).sort((p, q) => p - q);
+  const year = years.filter(y => y <= want).pop() ?? years[0];
+  return { year, wanted: want, ...TAX_YEARS[year] };
+}
+/** States (and DC) with their names, sorted by name, from the latest year on file. */
+export const STATES = Object.entries(Object.values(TAX_YEARS).at(-1).states).map(([code, s]) => ({ code, name: s.name }))
+  .sort((p, q) => p.name.localeCompare(q.name));
+/** Tax on taxable income under brackets [[from, rate], ...], lowest first. */
+export function bracketTax(taxable, brackets) {
+  let tax = 0;
+  brackets.forEach(([from, rate], i) => { if (taxable > from) tax += (Math.min(taxable, brackets[i + 1]?.[0] ?? Infinity) - from) * rate; });
+  return tax;
+}
+/** Rate on the next dollar of taxable income. */
+export const bracketRate = (taxable, brackets) => brackets.findLast(([from]) => taxable >= from)?.[1] ?? 0;
+/**
+ * A state's figures for a filing status. The tables have single and married-filing-jointly brackets; other statuses
+ * use the single ones. The deduction is the standard deduction plus the personal exemption, where those are deductions.
+ */
+export function stateTax(fig, code, status) {
+  const s = code ? fig.states[code] : null, k = status === "married_joint" ? "married_joint" : "single";
+  return { code: code ?? null, name: s?.name ?? null, brackets: s?.brackets?.[k] ?? null, note: s?.note ?? null,
+    deduction: (s?.standard_deduction?.[k] ?? 0) + (s?.personal_exemption?.[k] ?? 0),
+    taxes_pretax_401k: !!s?.taxes_pretax_401k, local_income_taxes: !!s?.local_income_taxes };
+}
+/** 401(k) contribution limits for someone this age (catch-up from 50; the larger catch-up at 60-63). */
+export function k401Limits(age, fig) {
+  const k = fig.k401, catchUp = age >= 60 && age <= 63 ? k.catch_up_60_63 : age >= 50 ? k.catch_up : 0;
+  return { year: fig.year, deferral: k.deferral + catchUp, total: k.total + catchUp, catch_up: catchUp };
+}
+// employee contributions, each a fraction of gross pay
+export const SPLIT_KEYS = ["pretax_pct", "roth_pct", "after_tax_pct"];
+export const splitOf = ret => Object.fromEntries(SPLIT_KEYS.map(k => [k, ret?.[k] ?? 0]));
+const sameSplit = (a, b) => SPLIT_KEYS.every(k => Math.abs((a[k] ?? 0) - (b[k] ?? 0)) < 1e-9);
+/** The share of pay the employer matches on: pre-tax + Roth, plus after-tax when the plan matches it. */
+export const matchBasis = ret => (ret.pretax_pct ?? 0) + (ret.roth_pct ?? 0) + (ret.match_after_tax ? ret.after_tax_pct ?? 0 : 0);
+
 // ---------------------------------------------------------------- dates (ISO strings, UTC arithmetic)
 
 const DAY = 86400000;
@@ -120,10 +167,28 @@ function num(v, where) {
 function normPerson(p, who) {
   const income = { ...(p.income ?? {}) }, retirement = { ...(p.retirement ?? {}) };
   // retirement.match_tiers (optional): [{rate, pct}] = "rate match on the next pct of pay"; replaces the single rate + limit
-  const tiers = retirement.match_tiers;
-  delete retirement.match_tiers;
+  const tiers = retirement.match_tiers, matchAfterTax = retirement.match_after_tax, paycheck = retirement.paycheck;
+  delete retirement.match_tiers; delete retirement.match_after_tax; delete retirement.paycheck;
   for (const [sec, o] of [["income", income], ["retirement", retirement]])
     for (const k of Object.keys(o)) o[k] = num(o[k], `${who}${sec}.${k}`);
+  // older files have one employee contribution, which was pre-tax
+  if ("employee_contribution_pct" in retirement) {
+    if (SPLIT_KEYS.some(k => retirement[k])) throw new Error(`${who}retirement: give employee_contribution_pct or pretax_pct/roth_pct/after_tax_pct, not both`);
+    retirement.pretax_pct = retirement.employee_contribution_pct;
+    delete retirement.employee_contribution_pct;
+  }
+  const checkSplit = (s, what) => {
+    if (SPLIT_KEYS.some(k => !(s[k] >= 0 && s[k] < 1)) || SPLIT_KEYS.reduce((t, k) => t + s[k], 0) > 1)
+      throw new Error(`${who}${what}: contributions are fractions of gross pay, e.g. 0.06 for 6%, adding up to at most 1`);
+  };
+  checkSplit(splitOf(retirement), "retirement");
+  if (matchAfterTax) retirement.match_after_tax = true;
+  // the split the entered take-home pay reflects; kept only when it differs (then the current split is a what-if)
+  if (paycheck != null) {
+    const pc = Object.fromEntries(SPLIT_KEYS.map(k => [k, num(paycheck[k], `${who}retirement.paycheck.${k}`)]));
+    checkSplit(pc, "retirement.paycheck");
+    if (!sameSplit(pc, splitOf(retirement))) retirement.paycheck = pc;
+  }
   if (tiers != null) {
     if (!Array.isArray(tiers)) throw new Error(`${who}retirement.match_tiers must be a list`);
     if (retirement.employer_match_rate || retirement.employer_match_limit_pct)
@@ -177,6 +242,20 @@ export function normalize(input) {
     if (c.toLowerCase() === "none") d.currency = "none";
     else if (/^[a-z]{3}$/i.test(c)) d.currency = c.toUpperCase();
     else throw new Error('currency: use a 3-letter code like "USD", or "none"');
+  }
+  // household income tax, for the 401(k) estimates: filing status, and the state whose brackets apply (tax-tables.json)
+  if (d.tax != null) {
+    const t = d.tax, out = {};
+    if (t.filing_status != null && t.filing_status !== "") {
+      if (!FILING_STATUSES.includes(t.filing_status)) throw new Error(`tax.filing_status: use one of ${FILING_STATUSES.join(", ")}`);
+      out.filing_status = t.filing_status;
+    }
+    if (t.state != null && t.state !== "") {
+      const code = String(t.state).trim().toUpperCase();
+      if (!STATES.some(x => x.code === code)) throw new Error(`tax.state: use a two-letter state code like "CA", or "DC"`);
+      out.state = code;
+    }
+    if (Object.keys(out).length) d.tax = out; else delete d.tax;
   }
   if (d.fi) {
     for (const [k, [lo, hi]] of Object.entries(FI_RANGES))
@@ -260,6 +339,7 @@ const ratio = (n, dnm) => (dnm ? n / dnm : null);
 const sum = xs => xs.reduce((s, v) => s + v, 0);
 const fmtPct = (v, d = 0) => `${(v * 100).toFixed(d)}%`;
 const pctTxt = v => `${+(v * 100).toFixed(2)}%`; // 4.25%, 4%, no trailing zeros
+const fmtSigned = v => `${v >= 0 ? "+" : ""}${(v * 100).toFixed(1)}%`; // +1.2%, -0.4%
 
 const matchTiers = ret => ret.match_tiers ?? [{ rate: ret.employer_match_rate ?? 0, pct: ret.employer_match_limit_pct ?? 0 }];
 
@@ -335,16 +415,45 @@ export function payoffMonths(balance, apr, payment) {
  */
 export function analyze(d, today = todayISO()) {
   const assumptions = [];
+  // income tax estimate for the 401(k) split (US: USD amounts only): federal and state brackets, each with its standard
+  // deduction, on salary minus pre-tax 401(k) and other paycheck deductions. Only differences are used.
+  const fig = taxYear(today), usTax = (d.currency ?? DEFAULT_CURRENCY) === "USD", nPeople = (d.people ?? []).length;
+  const status = d.tax?.filing_status ?? (nPeople > 1 ? "married_joint" : "single"), st = stateTax(fig, d.tax?.state, status);
+  const fedBrackets = fig.federal.brackets[status], std = fig.federal.standard_deduction[status];
+  const base = (d.people ?? []).map(p => {
+    const ret = p.retirement, split = splitOf(ret);
+    return { gross: p.income.gross_annual ?? 0, deductions: perMonth(p.income, "other_deductions") * 12, split, paycheck: ret.paycheck ?? split };
+  });
+  /** Taxable income per person given each person's pre-tax share of pay (married filing jointly: the couple's, for each). */
+  const taxableAt = (pretax, deduction, pretaxExcluded = true) => {
+    const wages = base.map((b, i) => Math.max(0, b.gross * (1 - (pretaxExcluded ? pretax[i] : 0)) - b.deductions));
+    return status === "married_joint" ? wages.map(() => Math.max(0, sum(wages) - deduction)) : wages.map(w => Math.max(0, w - deduction));
+  };
+  const fedTaxable = pretax => taxableAt(pretax, std), stateTaxable = pretax => taxableAt(pretax, st.deduction, !st.taxes_pretax_401k);
+  const onUnits = (t, f) => (status === "married_joint" ? f(t[0] ?? 0) : sum(t.map(f))); // one return for a married couple filing jointly
+  const taxAt = pretax => !usTax ? 0 : onUnits(fedTaxable(pretax), x => bracketTax(x, fedBrackets)) +
+    (st.brackets ? onUnits(stateTaxable(pretax), x => bracketTax(x, st.brackets)) : 0);
+  const paycheckPretax = base.map(b => b.paycheck.pretax_pct);
+  /** Income tax change (a year) when person i's pre-tax share moves from their paycheck split to `pretax`. */
+  const taxChange = (i, pretax) => taxAt(paycheckPretax.map((v, j) => (j === i ? pretax : v))) - taxAt(paycheckPretax);
+  const totalPct = s => sum(SPLIT_KEYS.map(k => s[k]));
+  /** Monthly take-home for person i at split `s`, from the take-home they entered (which reflects their paycheck split). */
+  const takeHomeAt = (i, entered, s) => entered - ((totalPct(s) - totalPct(base[i].paycheck)) * base[i].gross + taxChange(i, s.pretax_pct)) / 12;
+
   // per earner: pay, 401(k) flows, and taxes withheld (what's left of gross after take-home, 401(k), and other deductions)
-  const people = (d.people ?? []).map(p => {
-    const inc = p.income, ret = p.retirement;
-    const takeHome = perMonth(inc, "take_home"), gross = (inc.gross_annual ?? 0) / 12, otherDed = perMonth(inc, "other_deductions");
-    const empPct = ret.employee_contribution_pct ?? 0, employee401k = empPct * gross;
-    const employer401k = (matchPct(ret, empPct) + (ret.employer_nonelective_pct ?? 0)) * gross;
+  const people = (d.people ?? []).map((p, i) => {
+    const inc = p.income, ret = p.retirement, { split } = base[i];
+    const entered = perMonth(inc, "take_home"), gross = (inc.gross_annual ?? 0) / 12, otherDed = perMonth(inc, "other_deductions");
+    // a split other than the paycheck's is a what-if: take-home is re-estimated for it
+    const whatIf = !!ret.paycheck && gross > 0 && entered > 0, takeHome = whatIf ? takeHomeAt(i, entered, split) : entered;
+    const employee401k = totalPct(split) * gross, basis = matchBasis(ret);
+    const employer401k = (matchPct(ret, basis) + (ret.employer_nonelective_pct ?? 0)) * gross;
     const fullMatch = matchPct(ret, Infinity);
     return { name: p.name, age: p.age ?? null, ret, biweekly: "take_home_biweekly" in inc, take_home: takeHome, gross, other_deductions: otherDed,
-      employee_401k: employee401k, employer_401k: employer401k, taxes: gross > 0 && takeHome > 0 ? gross - employee401k - otherDed - takeHome : null,
-      match_captured: fullMatch ? matchPct(ret, empPct) / fullMatch : null, full_match_at: fullMatchAt(ret) };
+      employee_401k: employee401k, pretax_401k: split.pretax_pct * gross, roth_401k: split.roth_pct * gross, after_tax_401k: split.after_tax_pct * gross,
+      employer_401k: employer401k, taxes: gross > 0 && takeHome > 0 ? gross - employee401k - otherDed - takeHome : null,
+      ...(whatIf ? { take_home_entered: entered } : {}),
+      match_captured: fullMatch ? matchPct(ret, basis) / fullMatch : null, full_match_at: fullMatchAt(ret) };
   });
   const multi = people.length > 1, total = k => sum(people.map(p => p[k]));
   const takeHome = total("take_home"), grossM = total("gross"), otherDed = total("other_deductions");
@@ -447,6 +556,61 @@ export function analyze(d, today = todayISO()) {
   // target 0 with spending > 0: income that continues already covers it
   const yearsToFi = plan.years_to_fi, fiProgress = plan.target ? investable / plan.target : burn > 0 ? 1 : null;
 
+  // 401(k) per earner: the year's limits, and the same pre-tax + Roth total split three ways (yours, all pre-tax, all Roth).
+  // At withdrawal: one year's contributions grown at the real return until you stop working, then taxed at the retirement
+  // rate, pre-tax in full and after-tax on its growth only. Employer money is the same in each, so it's left out.
+  const grow = (1 + plan.settings.real_return) ** plan.settings.retire_in_years, retTax = plan.settings.retirement_tax_rate;
+  const nowPretax = base.map(b => b.split.pretax_pct), fedNow = fedTaxable(nowPretax), stateNow = stateTaxable(nowPretax);
+  for (const [i, p] of people.entries()) {
+    const G = base[i].gross, s = base[i].split, deferPct = s.pretax_pct + s.roth_pct;
+    if (!usTax || !(G > 0) || !(totalPct(s) > 0)) continue;
+    const lim = k401Limits(p.age ?? 0, fig), employer = p.employer_401k * 12, deferrals = deferPct * G, afterTax = s.after_tax_pct * G;
+    // what goes in by month t: deferrals stop at their limit; after-tax stops when everything reaches the total limit
+    const inBy = t => Math.min(deferrals * t / 12, lim.deferral) + (employer + afterTax) * t / 12;
+    let atStop = null;
+    if (afterTax > 0 && inBy(12) > lim.total) {
+      let lo = 0, hi = 12;
+      for (let n = 0; n < 40; n++) { const mid = (lo + hi) / 2; if (inBy(mid) < lim.total) lo = mid; else hi = mid; }
+      atStop = lo;
+    }
+    const defIn = Math.min(deferrals, lim.deferral), atIn = afterTax * (atStop ?? 12) / 12;
+    const scale = deferrals ? defIn / deferrals : 0, entered = p.take_home_entered ?? p.take_home;
+    const scenario = (label, sc) => {
+      const pre = sc.pretax_pct * G * scale, value = (pre + sc.roth_pct * G * scale + atIn) * grow, tax = (pre * grow + atIn * (grow - 1)) * retTax;
+      return { label, split: sc, take_home_monthly: entered > 0 ? takeHomeAt(i, entered, sc) : null,
+        tax_now_change_annual: taxChange(i, sc.pretax_pct) - taxChange(i, s.pretax_pct), at_withdrawal: { value, tax, after_tax: value - tax } };
+    };
+    const alts = [["All pre-tax", { ...s, pretax_pct: deferPct, roth_pct: 0 }], ["All Roth", { ...s, pretax_pct: 0, roth_pct: deferPct }]];
+    // `now`: the rate pre-tax money avoids (a state that taxes pre-tax contributions saves nothing)
+    const fed = bracketRate(fedNow[i], fedBrackets), state = st.brackets ? bracketRate(stateNow[i], st.brackets) : 0;
+    const now = fed + (st.taxes_pretax_401k ? 0 : state);
+    p.k401 = {
+      limits: lim, deferrals, after_tax: afterTax, employer,
+      deferral_share: deferrals / lim.deferral, total_share: inBy(12) / lim.total,
+      deferral_stop_month: deferrals > lim.deferral ? 12 * lim.deferral / deferrals : null, // months into the year
+      after_tax_stop_month: atStop,
+      even_deferral_pct: lim.deferral / G, // pre-tax + Roth share of pay that reaches the limit with the last paycheck
+      marginal: { federal: fed, state, now, state_taxes_pretax: st.taxes_pretax_401k }, retirement_tax_rate: retTax,
+      favored: now > retTax + 0.02 ? "pre-tax" : now < retTax - 0.02 ? "Roth" : "similar",
+      scenarios: deferPct > 0 ? [scenario("Your split", s), ...alts.filter(([, sc]) => !sameSplit(sc, s)).map(([l, sc]) => scenario(l, sc))] : [],
+    };
+  }
+  const whose = i => (nPeople > 1 ? `person ${i + 1}'s ` : "the ");
+  // the state's name stays out (assumptions go into the export); its rules are described where they matter
+  const stateWords = !st.code ? "no state chosen, so no state income tax" : !st.brackets ? "the chosen state has no income tax on wages"
+    : `the chosen state's ${fig.year} brackets${["single", "married_joint"].includes(status) ? "" : " for single filers"}, with its standard deduction and personal exemption` +
+      (st.taxes_pretax_401k ? "; that state taxes pre-tax 401(k) contributions, so pre-tax saves federal tax only" : "") +
+      (st.local_income_taxes ? "; county or city income taxes are left out" : "");
+  if (people.some(p => p.k401))
+    assumptions.push(`401(k) tax estimates: ${fig.year} federal brackets, ${FILING_LABELS[status].toLowerCase()}` +
+      `${d.tax?.filing_status ? "" : " (assumed: filing status not set)"}, with the standard deduction, on salary minus pre-tax 401(k) and other paycheck deductions; ` +
+      `${stateWords}. Other income, itemized deductions, phase-outs, and credits are left out.`);
+  if (people.some(p => p.k401) && fig.year !== fig.wanted)
+    assumptions.push(`${fig.wanted} federal brackets and 401(k) limits aren't on file yet; ${fig.year} figures are used.`);
+  for (const [i, p] of people.entries())
+    if (p.take_home_entered) assumptions.push(`What-if: ${whose(i)}401(k) split differs from the paycheck split, so take-home pay is re-estimated ` +
+      `(${fmtSigned(p.take_home / p.take_home_entered - 1)} vs the paycheck entered${usTax ? "" : "; income tax changes are left out outside USD"}).`);
+
   const history = (d.history ?? []).filter(h => h.date < today).sort((p, q) => p.date.localeCompare(q.date))
     .map(h => ({ date: h.date, net_worth: h.net_worth, investable: h.investable }));
   history.push({ date: today, net_worth: netWorth, investable, current: true });
@@ -469,7 +633,7 @@ export function analyze(d, today = todayISO()) {
     savings_rate: savingsRate,
     taxes_share_of_gross: taxes === null ? null : taxes / taxedGross,
     people: multi ? people.map(p => ({ share_of_household_take_home: ratio(p.take_home, takeHome), share_of_household_gross: ratio(p.gross, grossM),
-      taxes_share_of_gross: p.taxes === null ? null : p.taxes / p.gross, contribution_pct: p.ret.employee_contribution_pct ?? 0,
+      taxes_share_of_gross: p.taxes === null ? null : p.taxes / p.gross, contribution_pct: totalPct(splitOf(p.ret)),
       match_captured: p.match_captured })) : null, // listed as person 1, 2, ... (names stay local)
     expenses_share_of_income: ratio(expTotal, income),
     debt_payments_share_of_income: ratio(debtPay, income),
@@ -497,6 +661,20 @@ export function analyze(d, today = todayISO()) {
       take_home_after_stopping_share_of_current_spending: plan.at_retirement.share_of_spending, // withdrawals after tax + continuing income
       money_lasts_years: plan.at_retirement.lasts_years, // null = 30+ years
     },
+    // 401(k) per earner, amount-free: the split, tax rates, and limits only as under / near / over
+    k401: people.flatMap((p, i) => {
+      const k = p.k401;
+      if (!k) return [];
+      const yours = k.scenarios[0]?.take_home_monthly;
+      return [{ ...(multi ? { person: i } : {}), ...splitOf(p.ret), match_counts_after_tax: !!p.ret.match_after_tax,
+        federal_marginal_rate: k.marginal.federal, state_rate: k.marginal.state, state_taxes_pretax: k.marginal.state_taxes_pretax,
+        retirement_tax_rate: k.retirement_tax_rate, favored: k.favored,
+        deferral_limit: k.deferral_stop_month !== null ? "over" : k.deferral_share >= 0.9 ? "near" : "under",
+        total_limit: k.after_tax_stop_month !== null ? "over" : "under",
+        // take-home with the same pre-tax + Roth total split differently, vs your split
+        take_home_change: yours ? Object.fromEntries(k.scenarios.slice(1).map(sc => [sc.label.replace(/^All/, "all"), sc.take_home_monthly / yours - 1])) : {},
+        what_if_take_home_change: p.take_home_entered ? p.take_home / p.take_home_entered - 1 : null }];
+    }),
     stock_share: stockPct,
     single_stock_share: singlePct,
     expense_mix: expTotal ? Object.fromEntries(Object.entries(expenses).sort((p, q) => q[1] - p[1]).map(([k, v]) => [k, v / expTotal])) : {},
@@ -517,8 +695,8 @@ export function analyze(d, today = todayISO()) {
   // ---- checks (amount-free details)
   const checks = [];
   // `person` (an index) marks a per-earner check when there are several; the page shows the name, the export "person N"
-  const C = (key, label, status, value, unit, detail, person) =>
-    checks.push({ key, label, status, value, unit, detail, ...(multi && person != null ? { person } : {}) });
+  const C = (key, label, status, value, unit, detail, person, valueText) =>
+    checks.push({ key, label, status, value, unit, detail, ...(valueText ? { value_text: valueText } : {}), ...(multi && person != null ? { person } : {}) });
   const outflows = props.length ? "expenses, housing, and minimum debt payments" : "expenses and minimum debt payments";
   const incomeWord = otherIncome ? "take-home plus other income" : "take-home pay";
   if (surplus < 0) C("cash_flow", "Monthly cash flow", "act", ratio(surplus, income), "%", `Monthly ${outflows} exceed ${incomeWord}.`);
@@ -541,8 +719,31 @@ export function analyze(d, today = todayISO()) {
     if (p.match_captured === null) continue;
     const tiers = p.ret.match_tiers;
     C("match", "Employer match captured", p.match_captured >= 0.999 ? "ok" : "act", p.match_captured, "%",
-      `Share of available employer match being contributed for. Contributing ${+(p.full_match_at * 100).toFixed(2)}% of salary gets the full match` +
+      `Share of available employer match being contributed for. Contributing ${+(p.full_match_at * 100).toFixed(2)}% of salary ` +
+      `(${p.ret.match_after_tax ? "pre-tax, Roth, and after-tax together" : "pre-tax plus Roth"}) gets the full match` +
       (tiers ? ` (tiered: ${tiers.map((t, j) => `${+(t.rate * 100).toFixed(2)}% of the ${j ? "next" : "first"} ${+(t.pct * 100).toFixed(2)}%`).join(", then ")}).` : "."), i);
+  }
+  for (const [i, p] of people.entries()) {
+    const k = p.k401;
+    if (!k) continue;
+    // the export only says under / near / over: a share of a public dollar limit would reveal the salary
+    const yr = k.limits.year, cu = k.limits.catch_up ? " (age catch-up included)" : "";
+    const over = k.deferral_stop_month !== null, atOver = k.after_tax_stop_month !== null, near = k.deferral_share >= 0.9;
+    C("k401_limit", "401(k) contribution limit", over || atOver ? "act" : "ok", null, "",
+      (k.deferrals ? (over ? `At these percentages pre-tax + Roth pass the ${yr} limit${cu} before year-end, and the plan stops them there. ` +
+          "Without a true-up in the plan, the employer match stops with them; a percentage that reaches the limit with the last paycheck keeps the full match."
+        : `Pre-tax + Roth are ${near ? "close to" : "under"} the ${yr} limit${cu}.`) : "No pre-tax or Roth contributions.") +
+      (k.after_tax ? (atOver ? ` After-tax contributions stop before year-end, when everything going in (yours and your employer's) reaches the ${yr} total limit.`
+        : ` After-tax contributions fit under the ${yr} total limit for yours and your employer's together.`) : ""),
+      i, over || atOver ? "Over" : near ? "Near" : "Under");
+    const s = splitOf(p.ret);
+    C("k401_tax", "401(k): pre-tax vs Roth", "info", k.marginal.now, "%",
+      `Estimated tax on your next dollar of pay: ${pctTxt(k.marginal.federal)} federal${k.marginal.state ? ` + ${pctTxt(k.marginal.state)} state` : ""}` +
+      `${k.marginal.state_taxes_pretax ? " (pre-tax contributions don't lower the state part)" : ""}, ` +
+      `vs ${pctTxt(k.retirement_tax_rate)} assumed on withdrawals. ` +
+      (k.favored === "pre-tax" ? "Pre-tax comes out ahead: the tax avoided now is more than the tax paid later."
+        : k.favored === "Roth" ? "Roth comes out ahead: the tax paid now is less than the tax avoided later." : "About even either way.") +
+      ` Contributing ${pctTxt(s.pretax_pct)} pre-tax, ${pctTxt(s.roth_pct)} Roth, ${pctTxt(s.after_tax_pct)} after-tax.`, i);
   }
   const grossWord = otherIncome ? "gross income (salary plus other income)" : "gross income";
   if (dti !== null) C("dti", props.length ? "Debt-to-income, excluding housing" : "Debt-to-income (payments / gross)", dti < 0.15 ? "ok" : dti <= 0.36 ? "watch" : "act", dti, "%",
@@ -668,7 +869,7 @@ export function exportMarkdown(A) {
     "All figures are ratios, durations, or indexes. No currency amounts are included. " +
     "Use this to give general, educational observations; the user's full numbers stay local.",
     "", "## Health checks", "", "| Check | Status | Value | Notes |", "|---|---|---|---|"];
-  for (const c of A.checks) L.push(`| ${c.label}${c.person != null ? ` (person ${c.person + 1})` : ""} | ${c.status.toUpperCase()} | ${fmtValue(c.value, c.unit)} | ${c.detail} |`);
+  for (const c of A.checks) L.push(`| ${c.label}${c.person != null ? ` (person ${c.person + 1})` : ""} | ${c.status.toUpperCase()} | ${c.value_text ?? fmtValue(c.value, c.unit)} | ${c.detail} |`);
   if (r.people) {
     L.push("", "## Household (two or more earners; shared expenses, debts, property, and accounts)", "");
     r.people.forEach((p, i) => L.push(`- person ${i + 1}: ${fmtValue(p.share_of_household_take_home, "%")} of household take-home, ` +
@@ -698,6 +899,20 @@ export function exportMarkdown(A) {
     for (const p of h.properties)
       L.push(`- ${p.name} (${p.residence ? "lives here" : "not lived in"}): loan-to-value ${fmtValue(p.loan_to_value, "%")}` +
         (p.loans.length ? "; " + p.loans.map(l => `${l.name} at ${pctTxt(l.apr)}, payoff at current payment ${payoff(l.months_to_payoff)}`).join("; ") : "; no loans"));
+  }
+  if (r.k401.length) {
+    L.push("", "## 401(k) (contributions as a share of gross pay)", "");
+    for (const k of r.k401) {
+      const who = k.person != null ? `person ${k.person + 1}: ` : "";
+      const th = Object.entries(k.take_home_change).map(([l, v]) => `${l} ${fmtSigned(v)}`).join(", ");
+      L.push(`- ${who}${pctTxt(k.pretax_pct)} pre-tax, ${pctTxt(k.roth_pct)} Roth, ${pctTxt(k.after_tax_pct)} after-tax; ` +
+          `the employer match counts ${k.match_counts_after_tax ? "all three" : "pre-tax and Roth"}`,
+        `- ${who}estimated tax on the next dollar of pay ${pctTxt(k.federal_marginal_rate)} federal${k.state_rate ? ` + ${pctTxt(k.state_rate)} state` : ""}` +
+          `${k.state_taxes_pretax ? " (pre-tax contributions don't lower the state part)" : ""}, ` +
+          `vs ${pctTxt(k.retirement_tax_rate)} assumed on withdrawals: ${k.favored === "similar" ? "pre-tax and Roth about even" : `${k.favored} comes out ahead`}` +
+          (th ? `; take-home with the same pre-tax + Roth total, ${th} vs the current split` : ""),
+        `- ${who}pre-tax + Roth ${k.deferral_limit} the annual limit; everything going in (incl. employer and after-tax) ${k.total_limit} the total limit`);
+    }
   }
   const rp = r.retirement;
   L.push("", "## Retirement plan (today's dollars, user-set assumptions)", "",

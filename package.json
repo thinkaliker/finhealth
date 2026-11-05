@@ -9,5 +9,5 @@
     "start": "node cli.js serve data.json --open",
     "test": "node --test"
   },
-  "engines": { "node": ">=18" }
+  "engines": { "node": ">=18.20" }
 }

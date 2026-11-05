@@ -196,6 +196,7 @@ function card(title, sub, ...body) {
 const ICON = { ok: "✓", watch: "!", act: "✕", info: "i" };
 const STATUS_WORD = { ok: "OK", watch: "Watch", act: "Act", info: "Info" };
 function fmtCheck(c) {
+  if (c.value_text) return c.value_text;
   if (c.value == null) return "n/a";
   if (c.unit.startsWith("%")) return pct(c.value, c.value > 0 && Math.abs(c.value) < 0.1 ? 1 : 0);
   if (c.unit === "days") return Math.round(c.value) + " days";
@@ -267,6 +268,56 @@ function draw() {
         earners.flatMap(p => partsOf(p).map(x => [...(multi ? [p.label] : []), x.name, money(x.value), money(x.value * 12), pct(x.value / p.gross, 1)])))));
   }
 
+  // 401(k) per earner: the year's limits, and pre-tax vs Roth for the same total
+  a.people.forEach((p, i) => {
+    const k = p.k401;
+    if (!k) return;
+    const lim = k.limits, monthName = m => new Date(2000, Math.min(11, Math.max(0, Math.ceil(m) - 1)), 1).toLocaleDateString(undefined, { month: "long" });
+    const meter = (name, used, limit, stop) => {
+      const over = stop != null, color = over ? C("--critical") : C("--s1");
+      const fill = el("div", { class: "fill", style: `width:${Math.min(1, used / limit) * 100}%;background:${color}` });
+      hoverable(fill, () => [name, [{ color, name: `${lim.year} limit ${money(limit)}`, value: money(used) },
+        ...(over ? [{ name: "stops in", value: monthName(stop) }] : [])]]);
+      return el("div", { class: "hbar" }, el("span", { class: "name", text: name }), el("div", { class: "track" }, fill),
+        el("span", { class: "v" }, pct(used / limit), el("small", { text: "of " + money(limit) })));
+    };
+    const used = k.total_share * lim.total, sc = k.scenarios, splitTxt = x => `${pctT(x.pretax_pct)} / ${pctT(x.roth_pct)} / ${pctT(x.after_tax_pct)}`;
+    const notes = [
+      k.deferral_stop_month != null ? `Pre-tax + Roth reach the limit in ${monthName(k.deferral_stop_month)} and stop. ` +
+        `${pctT(k.even_deferral_pct)} of pay reaches it with the last paycheck, which keeps the match all year if your plan has no true-up.` : null,
+      k.after_tax_stop_month != null ? `After-tax contributions stop in ${monthName(k.after_tax_stop_month)}, when everything going in reaches the total limit.` : null,
+      lim.catch_up ? `Limits include the ${money(lim.catch_up)} catch-up for your age.` : null,
+    ].filter(Boolean).join(" ");
+    const rate = `${pctT(k.marginal.federal)} federal` + (k.marginal.state ? ` + ${pctT(k.marginal.state)} state` : "") +
+      (k.marginal.state_taxes_pretax ? " (your state taxes pre-tax contributions, so pre-tax saves the federal part only)" : "");
+    grid.append(card("401(k)" + (a.people.length > 1 ? " · " + personName(i) : ""),
+      `${pctT(p.pretax_401k / p.gross)} pre-tax · ${pctT(p.roth_401k / p.gross)} Roth · ${pctT(p.after_tax_401k / p.gross)} after-tax of gross pay. ` +
+        `Employer adds ${money(k.employer)} / year.`,
+      el("div", { class: "stacklab", text: `${lim.year} limits` }),
+      meter("Pre-tax + Roth", k.deferrals, lim.deferral, k.deferral_stop_month),
+      meter("Everything in", used, lim.total, k.after_tax_stop_month),
+      notes ? el("p", { class: "note", text: notes }) : null,
+      sc.length ? el("div", {},
+        el("div", { class: "stacklab", text: "Same pre-tax + Roth total, split differently" }),
+        el("table", { class: "cmp" },
+          el("thead", {}, el("tr", {}, ...["", "Pre / Roth / After", "Take-home / mo", "Tax now / yr", "After tax at withdrawal"].map(h => el("th", { text: h })))),
+          el("tbody", {}, ...sc.map((x, j) => el("tr", { class: j ? "" : "mine" },
+            el("td", { text: x.label }), el("td", { text: splitTxt(x.split) }), el("td", { text: x.take_home_monthly == null ? "n/a" : money(x.take_home_monthly) }),
+            el("td", { text: j ? (x.tax_now_change_annual >= 0 ? "+" : "−") + money(Math.abs(x.tax_now_change_annual)) : "—" }),
+            el("td", { text: money(x.at_withdrawal.after_tax) })))))) : null,
+      el("p", { class: "note", text: `Tax on your next dollar of pay: ${rate}; on withdrawals, an assumed ${pctT(k.retirement_tax_rate)} (Retirement plan settings). ` +
+        (k.favored === "pre-tax" ? "Pre-tax comes out ahead if you invest what it saves you now: the tax avoided now is more than the tax paid later."
+          : k.favored === "Roth" ? "Roth comes out ahead: the tax paid now is less than the tax avoided later."
+          : "Pre-tax and Roth come out about even.") }),
+      el("p", { class: "note", text: `At withdrawal: one year's contributions grown at ${pctT(S.analysis.ratios.retirement.real_return)} a year after inflation until you stop working ` +
+        `(${S.analysis.ratios.retirement.stop_working_in_years} years), then taxed: pre-tax in full, after-tax on its growth, Roth not at all. ` +
+        "Employer money is the same in each and not included. After-tax money converted to Roth in the plan grows tax-free too." }),
+      table(["Item", "Amount", "Limit", "Share"], [
+        ["Pre-tax + Roth / year", money(k.deferrals), money(lim.deferral), pct(k.deferral_share, 1)],
+        ["Everything in / year", money(used), money(lim.total), pct(k.total_share, 1)],
+        ...sc.map(x => [`${x.label}: take-home / month`, x.take_home_monthly == null ? "n/a" : money(x.take_home_monthly), "", ""])])));
+  });
+
   // cash flow: income (take-home plus other income) split into where it goes
   const inc = a.income_monthly, oi = a.other_income_monthly, re = a.real_estate;
   const saved = Math.min(a.saved_from_pay_monthly, Math.max(0, a.surplus_monthly));
@@ -286,7 +337,7 @@ function draw() {
     a.surplus_monthly < 0 ? el("p", { class: "sub", style: "color:var(--critical);font-weight:600", text: `Spending exceeds ${oi ? "income" : "take-home"} by ${money(-a.surplus_monthly)} / month.` }) : null,
     el("div", { class: "stacklab", text: oi ? `Income ${money(inc)}: take-home ${money(th)} + other income ${money(oi)}` : `Take-home ${money(th)}` }), stackBar(flow, money),
     legend(flow.map(f => ({ ...f, value: `${money(f.value)} · ${pct(inc ? f.value / inc : 0)}` }))),
-    el("div", { class: "stacklab", text: `Pre-tax retirement ${money(a.employee_401k_monthly + a.employer_401k_monthly)}` }), stackBar(pay401, money),
+    el("div", { class: "stacklab", text: `401(k) contributions ${money(a.employee_401k_monthly + a.employer_401k_monthly)}` }), stackBar(pay401, money),
     legend(pay401.map(f => ({ ...f, value: money(f.value) }))),
     table(["Item", "Per month", oi ? "Share of income" : "Share of take-home"], [...flow, ...pay401].map(f => [f.name, money(f.value), inc ? pct(f.value / inc, 1) : "n/a"]))));
 

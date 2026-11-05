@@ -2,8 +2,8 @@
 // results and charts from charts.js. Template expressions only reference properties and methods
 // defined here, which is what the CSP build requires (no eval).
 import Alpine from "./vendor/alpine-csp.esm.min.js";
-import { normalize, analyze, exportMarkdown, todayISO, addMonths, BIWEEKLY_TO_MONTHLY, matchPct, fullMatchAt,
-  moneyFormat, CURRENCIES, DEFAULT_CURRENCY, formatAmount, parseAmount } from "./finhealth.js";
+import { normalize, analyze, exportMarkdown, todayISO, addMonths, BIWEEKLY_TO_MONTHLY, matchPct, fullMatchAt, matchBasis,
+  moneyFormat, CURRENCIES, DEFAULT_CURRENCY, formatAmount, parseAmount, SPLIT_KEYS, splitOf, FILING_LABELS, STATES, taxYear } from "./finhealth.js";
 import { renderResults, drawCharts, setFiHandler, markStale } from "./charts.js";
 import { detectStore } from "./store.js";
 
@@ -15,11 +15,13 @@ const newPerson = () => ({ name: "", income: {}, retirement: {}, _id: nextId++ }
 /** Shape data for editing: every section present, every list row tagged with a stable _id for x-for keys. */
 function forEditing(d) {
   const out = { ...d };
-  for (const s of ["profile", "fi"]) out[s] = { ...(d[s] ?? {}) };
+  for (const s of ["profile", "fi", "tax"]) out[s] = { ...(d[s] ?? {}) };
   // people: always at least one; each has its own income and 401(k) (match tiers tagged for x-for keys)
   out.people = (d.people?.length ? d.people : [newPerson()]).map(p => {
     const r = { ...(p.retirement ?? {}) };
     if (r.match_tiers) r.match_tiers = r.match_tiers.map(t => ({ ...t, _id: nextId++ }));
+    // the split the entered take-home reflects: editing the percentages after this is a what-if until confirmed
+    r.paycheck = { ...(r.paycheck ?? splitOf(r)) };
     return { ...p, income: { ...(p.income ?? {}) }, retirement: r, _id: nextId++ };
   });
   for (const l of LISTS) out[l] = (d[l] ?? []).map(r => ({ ...r, _id: nextId++ }));
@@ -30,7 +32,7 @@ function forEditing(d) {
 }
 /** Strip editor-only keys (leading underscore) and proxies. */
 const plain = d => JSON.parse(JSON.stringify(d, (k, v) => (k.startsWith("_") ? undefined : v)));
-const blank = () => ({ people: [newPerson()], profile: {}, fi: {}, expenses: [], debts: [], accounts: [], history: [], properties: [], other_income: [] });
+const blank = () => ({ people: [newPerson()], profile: {}, fi: {}, tax: {}, expenses: [], debts: [], accounts: [], history: [], properties: [], other_income: [] });
 const fmts = {};
 const fmtFor = code => fmts[code ?? DEFAULT_CURRENCY] ??= moneyFormat(code ?? DEFAULT_CURRENCY);
 let money = fmtFor().money; // follows data.currency; set in recompute()
@@ -209,14 +211,20 @@ Alpine.data("app", () => ({
     money = fmtFor(n.currency).money;
     showCurrencySymbol(n.currency);
     const a = A.amounts;
-    const perPerson = {}; // "income<_id>", "retirement<_id>", "match<_id>": section summaries for each person
+    const perPerson = {}; // "income<_id>", "retirement<_id>", "match<_id>", "whatif<_id>": section text for each person
     n.people.forEach((np, i) => {
-      const id = this.data.people[i]?._id, p = a.people[i], ret = np.retirement, full = matchPct(ret, Infinity), emp = ret.employee_contribution_pct ?? 0;
+      const id = this.data.people[i]?._id, p = a.people[i], ret = np.retirement, full = matchPct(ret, Infinity), emp = matchBasis(ret);
       perPerson["income" + id] = money(p.take_home) + " / mo" + (p.taxes > 0 ? " · taxes " + money(p.taxes) : "");
       perPerson["retirement" + id] = money(p.employee_401k + p.employer_401k) + " / mo";
       perPerson["match" + id] = full ? `Full match: ${pctText(full)} of pay when contributing ${pctText(fullMatchAt(ret))}. ` +
         `At ${pctText(emp)}, the match is ${pctText(matchPct(ret, emp))}.` : "";
+      if (p.take_home_entered) {
+        const diff = Math.round(p.take_home - p.take_home_entered);
+        perPerson["whatif" + id] = `With the split above, take-home would be about ${money(p.take_home)} a month` +
+          (diff ? ` (${money(Math.abs(diff))} ${diff < 0 ? "less" : "more"}).` : ", about the same.");
+      }
     });
+    const k = a.people.find(p => p.k401)?.k401, fs = n.tax?.filing_status ?? (n.people.length > 1 ? "married_joint" : "single");
     this.sums = {
       ...perPerson,
       savings: n.savings ? money(a.saved_from_pay_monthly) + " / mo" : "assumed: full surplus",
@@ -226,6 +234,8 @@ Alpine.data("app", () => ({
       other_income: n.other_income.length ? money(a.other_income_monthly) + " / mo" : "none",
       accounts: n.accounts.length + " · " + money(a.assets),
       history: n.history.length + " snapshot" + (n.history.length === 1 ? "" : "s"),
+      tax: [FILING_LABELS[fs], STATES.find(s => s.code === n.tax?.state)?.name,
+        k ? `${pctText(k.marginal.federal)} federal` + (k.marginal.state ? ` + ${pctText(k.marginal.state)} state` : "") : null].filter(Boolean).join(" · "),
     };
     renderResults(this.$refs.results, A, n);
   },
@@ -346,6 +356,47 @@ Alpine.data("app", () => ({
   toggleSavings(ev) {
     if (ev.target.checked) this.data.savings = { monthly_to_investments: 0, monthly_to_cash: 0 };
     else delete this.data.savings;
+  },
+  // 401(k) split: pre-tax, Roth, after-tax. A split other than the paycheck's (retirement.paycheck) is a what-if.
+  hasWhatIf(person) {
+    const r = person.retirement, pc = r.paycheck;
+    return !!pc && SPLIT_KEYS.some(k => Math.abs((Number(r[k]) || 0) - (Number(pc[k]) || 0)) > 1e-9);
+  },
+  whatIfText(person) {
+    const pc = person.retirement.paycheck ?? {};
+    const parts = [["pretax_pct", "pre-tax"], ["roth_pct", "Roth"], ["after_tax_pct", "after-tax"]]
+      .filter(([k]) => Number(pc[k])).map(([k, word]) => `${pctText(Number(pc[k]))} ${word}`);
+    return `Your paycheck: ${parts.join(" + ") || "no 401(k) contributions"}. ` +
+      (this.sums["whatif" + person._id] ?? "Enter gross salary and take-home pay to see take-home for the split above.");
+  },
+  /** The paycheck now has this split: take-home becomes the estimate, so results don't jump back, until a real paycheck is entered. */
+  usePaycheckSplit(person) {
+    const r = person.retirement, inc = person.income;
+    const est = this.error ? null : this._current?.A.amounts.people[this.data.people.findIndex(p => p._id === person._id)];
+    if (est?.take_home_entered) {
+      if (this.isBiweekly(person)) inc.take_home_biweekly = Math.round(est.take_home / BIWEEKLY_TO_MONTHLY);
+      else inc.take_home_monthly = Math.round(est.take_home);
+    }
+    r.paycheck = Object.fromEntries(SPLIT_KEYS.map(k => [k, Number(r[k]) || 0]));
+  },
+  resetSplit(person) {
+    const r = person.retirement;
+    for (const k of SPLIT_KEYS) if (r.paycheck[k]) r[k] = r.paycheck[k]; else delete r[k]; // a 0 shows as a blank field, as entered
+  },
+  // household income tax: filing status (unset: single for one person, married filing jointly for two) and state
+  filingStatuses: Object.entries(FILING_LABELS).map(([value, label]) => ({ value, label })),
+  filingStatus() { return this.data.tax.filing_status ?? (this.data.people.length > 1 ? "married_joint" : "single"); },
+  isFiling(s) { return s.value === this.filingStatus(); },
+  setFiling(ev) { this.data.tax.filing_status = ev.target.value; },
+  states: [{ code: "", name: "Not chosen (no state tax)" }, ...STATES],
+  isState(s) { return s.code === (this.data.tax.state ?? ""); },
+  setState(ev) { if (ev.target.value) this.data.tax.state = ev.target.value; else delete this.data.tax.state; },
+  stateHint() {
+    const s = taxYear(todayISO()).states[this.data.tax.state];
+    if (!s) return "Choose a state for its income tax brackets.";
+    if (!s.brackets) return s.note ?? "No state income tax on wages.";
+    return [s.note, s.local_income_taxes ? "County or city income taxes aren't included." : null].filter(Boolean).join(" ") ||
+      "Rate from the state's brackets, after its standard deduction and personal exemption.";
   },
   // tiered employer match: replaces the single match rate + limit; switching carries the single match into tier 1 and back
   hasTiers(person) { return Array.isArray(person.retirement.match_tiers); },
